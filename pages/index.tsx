@@ -68,7 +68,8 @@ export default function Services() {
       const counts: { [key: string]: { like: number; dislike: number } } = {};
       data.forEach((r: Reaction) => {
         if (!counts[r.service_id]) counts[r.service_id] = { like: 0, dislike: 0 };
-        counts[r.reaction]++;
+        counts[r.service_id][r.reaction]++;
+
       });
       setReactionCounts(counts);
 
