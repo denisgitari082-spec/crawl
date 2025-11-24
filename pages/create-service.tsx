@@ -71,17 +71,42 @@ export default function AddEditService() {
 
     setLoading(true);
 
+    // Trim inputs to remove extra spaces
+    const trimmedCategory = category.trim();
+    const trimmedTitle = title.trim();
+    const trimmedDescription = description.trim();
+    const trimmedProvider = provider.trim();
+    const trimmedContact = contact.trim();
+    const trimmedLocation = location.trim();
+
     if (serviceId) {
       const { error } = await supabase
         .from("services")
-        .update({ title, description, category, provider, contact, location })
+        .update({
+          title: trimmedTitle,
+          description: trimmedDescription,
+          category: trimmedCategory,
+          provider: trimmedProvider,
+          contact: trimmedContact,
+          location: trimmedLocation,
+        })
         .eq("id", serviceId);
       setLoading(false);
       if (error) return setErrorMsg(error.message);
     } else {
       const { error } = await supabase
         .from("services")
-        .insert([{ title, description, category, provider, contact, location, owner_id: currentUser }]);
+        .insert([
+          {
+            title: trimmedTitle,
+            description: trimmedDescription,
+            category: trimmedCategory,
+            provider: trimmedProvider,
+            contact: trimmedContact,
+            location: trimmedLocation,
+            owner_id: currentUser,
+          },
+        ]);
       setLoading(false);
       if (error) return setErrorMsg(error.message);
     }
@@ -108,12 +133,54 @@ export default function AddEditService() {
         {warning && <p className="warning">{warning}</p>}
 
         <form className="form" onSubmit={handleSave}>
-          <input type="text" placeholder="Service Title" value={title} onChange={(e) => setTitle(e.target.value)} required className="input" />
-          <textarea placeholder="Description" value={description} onChange={(e) => setDescription(e.target.value)} required className="textarea" rows={4} />
-          <input type="text" placeholder="Category (e.g. Cleaning)" value={category} onChange={(e) => setCategory(e.target.value)} required className="input" />
-          <input type="text" placeholder="Provider Name" value={provider} onChange={(e) => setProvider(e.target.value)} required className="input" />
-          <input type="tel" placeholder="Phone Number (e.g. 254712345678)" value={contact} onChange={(e) => setContact(e.target.value)} required className="input" />
-          <input type="text" placeholder="Job Location (e.g. Nairobi)" value={location} onChange={(e) => setLocation(e.target.value)} required className="input" />
+          <input
+            type="text"
+            placeholder="Service Title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            required
+            className="input"
+          />
+          <textarea
+            placeholder="Description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            required
+            className="textarea"
+            rows={4}
+          />
+          <input
+            type="text"
+            placeholder="Category (e.g. Cleaning)"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            required
+            className="input"
+          />
+          <input
+            type="text"
+            placeholder="Provider Name"
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+            required
+            className="input"
+          />
+          <input
+            type="tel"
+            placeholder="Phone Number (e.g. 254712345678)"
+            value={contact}
+            onChange={(e) => setContact(e.target.value)}
+            required
+            className="input"
+          />
+          <input
+            type="text"
+            placeholder="Job Location (e.g. Nairobi)"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            required
+            className="input"
+          />
 
           <button type="submit" disabled={loading} className="button">
             {loading ? "Saving..." : serviceId ? "Update Service" : "Add Service"}
@@ -127,7 +194,6 @@ export default function AddEditService() {
         </form>
       </div>
 
-      {/* ---------------- CSS ---------------- */}
       <style jsx>{`
         .page {
           background: #1e3a8a;
