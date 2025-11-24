@@ -1,19 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { createClient } from "@supabase/supabase-js";
-import { useRouter } from "next/navigation";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { supabase } from "../src/lib/supabaseClient";
 
 export default function AddEditService() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const serviceId = searchParams?.get("id") ?? null;
-
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -24,13 +18,28 @@ export default function AddEditService() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [warning, setWarning] = useState("");
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
 
+  // ---------------- Auth Guard ----------------
   useEffect(() => {
-    if (serviceId) {
-      fetchService();
-    }
+    const checkAuth = async () => {
+      const { data } = await supabase.auth.getUser();
+      const user = data.user;
+      if (!user) {
+        router.push("/auth/login");
+        return;
+      }
+      if (!user.email_confirmed_at) {
+        router.push("/auth/verify-email");
+        return;
+      }
+      setCurrentUser(user.id);
+      if (serviceId) fetchService();
+    };
+    checkAuth();
   }, [serviceId]);
 
+  // ---------------- Fetch service for edit ----------------
   const fetchService = async () => {
     const { data, error } = await supabase
       .from("services")
@@ -49,6 +58,7 @@ export default function AddEditService() {
     setLocation(data.location);
   };
 
+  // ---------------- Save / Update ----------------
   const handleSave = async (e: any) => {
     e.preventDefault();
     setErrorMsg("");
@@ -62,7 +72,6 @@ export default function AddEditService() {
     setLoading(true);
 
     if (serviceId) {
-      // Update
       const { error } = await supabase
         .from("services")
         .update({ title, description, category, provider, contact, location })
@@ -70,10 +79,9 @@ export default function AddEditService() {
       setLoading(false);
       if (error) return setErrorMsg(error.message);
     } else {
-      // Insert
       const { error } = await supabase
         .from("services")
-        .insert([{ title, description, category, provider, contact, location }]);
+        .insert([{ title, description, category, provider, contact, location, owner_id: currentUser }]);
       setLoading(false);
       if (error) return setErrorMsg(error.message);
     }
@@ -81,6 +89,7 @@ export default function AddEditService() {
     router.push("/");
   };
 
+  // ---------------- Delete ----------------
   const handleDelete = async () => {
     if (!confirm("Are you sure you want to delete this service?")) return;
     setLoading(true);
@@ -99,54 +108,12 @@ export default function AddEditService() {
         {warning && <p className="warning">{warning}</p>}
 
         <form className="form" onSubmit={handleSave}>
-          <input
-            type="text"
-            placeholder="Service Title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-            className="input"
-          />
-          <textarea
-            placeholder="Description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            required
-            className="textarea"
-            rows={4}
-          />
-          <input
-            type="text"
-            placeholder="Category (e.g. Cleaning)"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            required
-            className="input"
-          />
-          <input
-            type="text"
-            placeholder="Provider Name"
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-            required
-            className="input"
-          />
-          <input
-            type="tel"
-            placeholder="Phone Number (e.g. 254712345678)"
-            value={contact}
-            onChange={(e) => setContact(e.target.value)}
-            required
-            className="input"
-          />
-          <input
-            type="text"
-            placeholder="Job Location (e.g. Nairobi)"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            required
-            className="input"
-          />
+          <input type="text" placeholder="Service Title" value={title} onChange={(e) => setTitle(e.target.value)} required className="input" />
+          <textarea placeholder="Description" value={description} onChange={(e) => setDescription(e.target.value)} required className="textarea" rows={4} />
+          <input type="text" placeholder="Category (e.g. Cleaning)" value={category} onChange={(e) => setCategory(e.target.value)} required className="input" />
+          <input type="text" placeholder="Provider Name" value={provider} onChange={(e) => setProvider(e.target.value)} required className="input" />
+          <input type="tel" placeholder="Phone Number (e.g. 254712345678)" value={contact} onChange={(e) => setContact(e.target.value)} required className="input" />
+          <input type="text" placeholder="Job Location (e.g. Nairobi)" value={location} onChange={(e) => setLocation(e.target.value)} required className="input" />
 
           <button type="submit" disabled={loading} className="button">
             {loading ? "Saving..." : serviceId ? "Update Service" : "Add Service"}
@@ -160,6 +127,7 @@ export default function AddEditService() {
         </form>
       </div>
 
+      {/* ---------------- CSS ---------------- */}
       <style jsx>{`
         .page {
           background: #1e3a8a;

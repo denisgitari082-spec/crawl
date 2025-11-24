@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/router";
 import Link from "next/link";
 import { supabase } from "../src/lib/supabaseClient";
 
@@ -21,7 +22,8 @@ type Reaction = {
   reaction: "like" | "dislike";
 };
 
-export default function Home() {
+export default function Services() {
+  const router = useRouter();
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -30,15 +32,27 @@ export default function Home() {
   const [reactionCounts, setReactionCounts] = useState<{ [key: string]: { like: number; dislike: number } }>({});
   const [seeMore, setSeeMore] = useState<{ [key: string]: boolean }>({});
 
+  // ---------------- Auth Guard ----------------
   useEffect(() => {
-    const getUser = async () => {
+    const checkAuth = async () => {
       const { data } = await supabase.auth.getUser();
-      setCurrentUser(data.user?.id || null);
+      const user = data.user;
+      if (!user) {
+        router.push("/auth/login"); // redirect if not logged in
+        return;
+      }
+      // Optional: enforce email verification
+      if (!user.email_confirmed_at) {
+        router.push("/auth/verify-email");
+        return;
+      }
+      setCurrentUser(user.id);
+      fetchServices();
     };
-    getUser();
-    fetchServices();
+    checkAuth();
   }, []);
 
+  // ---------------- Data fetching ----------------
   const fetchServices = async () => {
     setLoading(true);
     const { data, error } = await supabase.from("services").select("*");
@@ -54,7 +68,7 @@ export default function Home() {
       const counts: { [key: string]: { like: number; dislike: number } } = {};
       data.forEach((r: Reaction) => {
         if (!counts[r.service_id]) counts[r.service_id] = { like: 0, dislike: 0 };
-        counts[r.service_id][r.reaction]++;
+        counts[r.reaction]++;
       });
       setReactionCounts(counts);
 
@@ -68,6 +82,7 @@ export default function Home() {
     }
   };
 
+  // ---------------- Actions ----------------
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this service?")) return;
     const { error } = await supabase.from("services").delete().eq("id", id);
@@ -94,6 +109,7 @@ export default function Home() {
     });
   };
 
+  // ---------------- Filtering & grouping ----------------
   const filteredServices = services.filter((service) => {
     const term = search.toLowerCase();
     return (
@@ -122,10 +138,9 @@ export default function Home() {
   categories.forEach((cat) => {
     groupedServices[cat] = filteredServices.filter((s) => s.category.toLowerCase() === cat);
   });
-  groupedServices["others"] = filteredServices.filter(
-    (s) => !categories.includes(s.category.toLowerCase())
-  );
+  groupedServices["others"] = filteredServices.filter((s) => !categories.includes(s.category.toLowerCase()));
 
+  // ---------------- Render ----------------
   return (
     <div className="container">
       <h1 className="title">Service Marketplace</h1>
@@ -178,7 +193,6 @@ export default function Home() {
                         </a>
                       </div>
 
-                      {/* Like/Dislike buttons with counts on them */}
                       <div className="reaction-group">
                         <button
                           className="like"
@@ -196,7 +210,6 @@ export default function Home() {
                         </button>
                       </div>
 
-                      {/* Owner Actions */}
                       {service.owner_id === currentUser && (
                         <div className="owner-actions">
                           <Link href={`/edit-service/${service.id}`} className="edit">
@@ -214,9 +227,7 @@ export default function Home() {
                 {services.length > 4 && (
                   <button
                     className="see-more"
-                    onClick={() =>
-                      setSeeMore({ ...seeMore, [category]: !seeMore[category] })
-                    }
+                    onClick={() => setSeeMore({ ...seeMore, [category]: !seeMore[category] })}
                   >
                     {seeMore[category] ? "See Less" : "See More"}
                   </button>
@@ -227,6 +238,7 @@ export default function Home() {
         </>
       )}
 
+      
       <style jsx>{`
         .container {
           min-height: 100vh;
