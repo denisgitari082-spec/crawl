@@ -76,8 +76,9 @@ export default function Login() {
           flex-direction: column;
           justify-content: center;
           align-items: center;
-          background: linear-gradient(135deg, #1e3a8a, #2563eb);
+          gap: 20px; /* space between card and About Us */
           padding: 20px;
+          background: linear-gradient(135deg, #1e3a8a, #2563eb);
         }
         .card {
           background: white;
@@ -144,12 +145,10 @@ export default function Login() {
           text-decoration: underline;
         }
         .about-link {
-          margin-top: 20px;
           font-size: 16px;
           font-weight: bold;
           color: #2563eb;
           cursor: pointer;
-          text-align: center;
         }
         .about-link span:hover {
           text-decoration: underline;
