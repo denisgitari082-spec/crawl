@@ -62,17 +62,18 @@ export default function Login() {
           Don’t have an account?{" "}
           <span onClick={() => router.push("/auth/register")}>Register</span>
         </p>
-
-        {/* About Us link */}
-        <p className="about">
-          <span onClick={() => router.push("/about")}>About Us</span>
-        </p>
       </div>
+
+      {/* About Us link outside the card */}
+      <p className="about-link">
+        <span onClick={() => router.push("/about")}>About Us</span>
+      </p>
 
       <style jsx>{`
         .page {
           min-height: 100vh;
           display: flex;
+          flex-direction: column;
           justify-content: center;
           align-items: center;
           background: linear-gradient(135deg, #1e3a8a, #2563eb);
@@ -142,16 +143,15 @@ export default function Login() {
         .register span:hover {
           text-decoration: underline;
         }
-        .about {
-          margin-top: 10px;
-          font-size: 14px;
-        }
-        .about span {
+        .about-link {
+          margin-top: 20px;
+          font-size: 16px;
+          font-weight: bold;
           color: #2563eb;
           cursor: pointer;
-          font-weight: bold;
+          text-align: center;
         }
-        .about span:hover {
+        .about-link span:hover {
           text-decoration: underline;
         }
       `}</style>
