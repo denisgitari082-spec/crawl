@@ -3,16 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "../src/lib/supabaseClient";
 
-type Message = { 
-  id: string; 
-  sender_id?: string; 
-  receiver_id?: string; 
-  group_id?: string; 
-  text: string; 
-  created_at: string; 
-  is_read: boolean; 
-};
-
+type Message = { id: string; sender_id?: string; receiver_id?: string; group_id?: string; text: string; created_at: string; is_read: boolean; };
 type ChatUser = { id: string; email: string; full_name: string; category: string };
 type Group = { id: string; name: string; description: string };
 
@@ -27,7 +18,6 @@ export default function MessagesPage() {
   const [loading, setLoading] = useState(true);
   const [isOtherTyping, setIsOtherTyping] = useState(false);
 
-  // Group Create States
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [groupDesc, setGroupDesc] = useState("");
@@ -35,34 +25,52 @@ export default function MessagesPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Helper: Format Time
   const formatTime = (dateStr: string) => {
     if (!dateStr) return "";
     return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // 1. App Initialization
+  // 1. App Initialization - FIXED FETCH LOGIC
   useEffect(() => {
     const initApp = async () => {
       setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setLoading(false); return; }
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError || !user) {
+        console.error("Auth Error:", authError);
+        setLoading(false);
+        return;
+      }
       
       setCurrentUser(user);
 
-      // Upsert profile
-      await supabase.from("profiles").upsert({ 
+      // 1. Ensure current user has a profile
+      const { error: upsertError } = await supabase.from("profiles").upsert({ 
         id: user.id, 
         email: user.email,
         full_name: user.user_metadata?.full_name || user.email?.split('@')[0],
         category: 'Professional'
       });
+      if (upsertError) console.error("Profile Upsert Error:", upsertError);
 
-      const { data: users } = await supabase.from("profiles").select("*").neq("id", user.id);
-      const { data: groups } = await supabase.from("groups").select("*");
-      
-      setSuggestedUsers(users || []);
+      // 2. Fetch ALL users (Check if RLS is blocking this)
+      const { data: users, error: userError } = await supabase
+        .from("profiles")
+        .select("*")
+        .neq("id", user.id); // Hide self
+
+      if (userError) {
+        console.error("User Fetch Error (Check RLS Policies):", userError);
+      } else {
+        console.log("Users found:", users?.length);
+        setSuggestedUsers(users || []);
+      }
+
+      // 3. Fetch Groups
+      const { data: groups, error: groupError } = await supabase.from("groups").select("*");
+      if (groupError) console.error("Group Fetch Error:", groupError);
       setSuggestedGroups(groups || []);
+
       setLoading(false);
     };
     initApp();
@@ -96,7 +104,6 @@ export default function MessagesPage() {
 
     fetchMessages();
 
-    // CHANNEL SETUP (Messages + Presence)
     const channel = supabase.channel(`chat-${selectedTarget.id}`, {
       config: { presence: { key: currentUser.id } }
     });
@@ -134,7 +141,6 @@ export default function MessagesPage() {
 
   useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isOtherTyping]);
 
-  // 4. Actions
   const handleTyping = () => {
     if (!selectedTarget) return;
     const channel = supabase.channel(`chat-${selectedTarget.id}`);
@@ -189,15 +195,17 @@ export default function MessagesPage() {
         <div className="list-content">
           <p className="section-title">{view === "chats" ? "DIRECT MESSAGES" : "PUBLIC GROUPS"}</p>
           {view === "chats" ? (
-            suggestedUsers.map(u => (
-              <div key={u.id} className={`row ${selectedTarget?.id === u.id ? 'active' : ''}`} onClick={() => setSelectedTarget(u)}>
-                <div className="avatar">{u.full_name?.[0]}</div>
-                <div className="details">
-                  <div className="name">{u.full_name}</div>
-                  <div className="meta">{u.category}</div>
+            suggestedUsers.length > 0 ? (
+              suggestedUsers.map(u => (
+                <div key={u.id} className={`row ${selectedTarget?.id === u.id ? 'active' : ''}`} onClick={() => setSelectedTarget(u)}>
+                  <div className="avatar">{u.full_name?.[0] || "?"}</div>
+                  <div className="details">
+                    <div className="name">{u.full_name || "Unknown User"}</div>
+                    <div className="meta">{u.category || "Professional"}</div>
+                  </div>
                 </div>
-              </div>
-            ))
+              ))
+            ) : <p className="empty-label">No other users found</p>
           ) : (
             <div className="explore">
               <button className="create-btn" onClick={() => setShowCreateGroup(true)}>+ New Community</button>
@@ -240,11 +248,7 @@ export default function MessagesPage() {
               <div ref={scrollRef} />
             </div>
             <form className="input-box" onSubmit={sendMessage}>
-              <input 
-                value={newMessage} 
-                onChange={(e) => { setNewMessage(e.target.value); handleTyping(); }} 
-                placeholder="Write a message..." 
-              />
+              <input value={newMessage} onChange={(e) => { setNewMessage(e.target.value); handleTyping(); }} placeholder="Write a message..." />
               <button type="submit">SEND</button>
             </form>
           </>
@@ -275,6 +279,7 @@ export default function MessagesPage() {
         .tabs button.active { color: #3b82f6; border-bottom: 2px solid #3b82f6; background: #0f172a; }
         .list-content { flex: 1; overflow-y: auto; padding: 15px; }
         .section-title { font-size: 11px; color: #475569; margin: 10px 0 15px; letter-spacing: 1px; font-weight: bold; }
+        .empty-label { font-size: 12px; color: #475569; text-align: center; margin-top: 20px; }
         .row { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px; cursor: pointer; margin-bottom: 4px; transition: 0.2s; }
         .row:hover { background: #1e293b; }
         .row.active { background: #2563eb; }
@@ -283,33 +288,23 @@ export default function MessagesPage() {
         .name { font-size: 14px; font-weight: 600; }
         .meta { font-size: 12px; opacity: 0.6; }
         .create-btn { width: 100%; padding: 12px; background: #3b82f6; border: none; color: white; border-radius: 8px; cursor: pointer; font-weight: bold; margin-bottom: 15px; }
-
         .chat-window { flex: 1; display: flex; flex-direction: column; background: #0f172a; }
         .header { padding: 20px 25px; border-bottom: 1px solid #1e293b; font-weight: bold; background: #020617; font-size: 17px; }
         .messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
-        
         .bubble-wrapper { display: flex; width: 100%; }
         .sent-wrapper { justify-content: flex-end; }
         .received-wrapper { justify-content: flex-start; }
-        
         .bubble { max-width: 65%; padding: 10px 15px; border-radius: 18px; position: relative; }
         .sent { background: #2563eb; border-bottom-right-radius: 4px; }
         .received { background: #1e293b; border-bottom-left-radius: 4px; border: 1px solid #334155; }
-        
         .footer { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 4px; font-size: 10px; opacity: 0.7; }
         .status { color: #93c5fd; font-weight: bold; }
-
         .input-box { padding: 20px; display: flex; gap: 12px; background: #020617; border-top: 1px solid #1e293b; }
         .input-box input { flex: 1; padding: 14px 22px; background: #1e293b; border: 1px solid #334155; color: white; border-radius: 30px; outline: none; }
         .input-box button { background: #3b82f6; border: none; color: white; padding: 0 25px; border-radius: 30px; cursor: pointer; font-weight: bold; }
-
-        /* Typing Dot Animation */
         .typing-indicator { display: flex; gap: 4px; padding: 10px 15px; background: #1e293b; border-radius: 15px; width: fit-content; margin-bottom: 10px; }
         .typing-indicator span { width: 6px; height: 6px; background: #3b82f6; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out; }
-        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
         @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
-
         .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; }
         .modal { background: #1e293b; padding: 30px; border-radius: 16px; width: 380px; display: flex; flex-direction: column; gap: 15px; }
         .modal input, .modal textarea { padding: 12px; background: #0f172a; border: 1px solid #334155; color: white; border-radius: 8px; }
