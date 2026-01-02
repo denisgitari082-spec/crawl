@@ -25,40 +25,40 @@ export default function MessagesPage() {
 
   useEffect(() => {
     const initApp = async () => {
+      setLoading(true);
       try {
-        setLoading(true);
         const { data: { user } } = await supabase.auth.getUser();
         
         if (!user) {
+          console.log("No user session found");
           setLoading(false);
           return;
         }
+        
         setCurrentUser(user);
 
-        // SYNC PROFILE: Using your correct columns (id, email, full_name, category)
+        // Sync profile with your specific columns
         await supabase.from("profiles").upsert({ 
           id: user.id, 
           email: user.email,
           full_name: user.user_metadata?.full_name || user.email?.split('@')[0],
-          category: 'User' 
+          category: 'Professional'
         });
 
-        // FETCH USERS: Selecting the correct columns
-        const { data: users, error: uErr } = await supabase
+        // Fetch other pros
+        const { data: users } = await supabase
           .from("profiles")
           .select("id, email, full_name, category")
           .neq("id", user.id);
         
-        if (uErr) alert("User Fetch Error: " + uErr.message);
-        else setSuggestedUsers(users || []);
+        setSuggestedUsers(users || []);
 
-        // FETCH GROUPS
-        const { data: groups, error: gErr } = await supabase.from("groups").select("*");
-        if (gErr) console.error("Groups Error:", gErr.message);
-        else setSuggestedGroups(groups || []);
+        // Fetch groups
+        const { data: groups } = await supabase.from("groups").select("*");
+        setSuggestedGroups(groups || []);
 
       } catch (err) {
-        console.error("Init Error:", err);
+        console.error("Initialization error:", err);
       } finally {
         setLoading(false);
       }
@@ -66,42 +66,52 @@ export default function MessagesPage() {
     initApp();
   }, []);
 
-  // Message Fetching & Realtime
+  // Fetch messages when a target is selected
   useEffect(() => {
-    if (!selectedTarget || !currentUser) return;
+    if (!selectedTarget || !currentUser?.id) return;
 
     const fetchMessages = async () => {
       let query = supabase.from("messages").select("*").order("created_at", { ascending: true });
+      
       if ("email" in selectedTarget) {
+        // Person to Person logic
         query = query.or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${selectedTarget.id}),and(sender_id.eq.${selectedTarget.id},receiver_id.eq.${currentUser.id})`);
       } else {
+        // Group logic
         query = query.eq("group_id", selectedTarget.id);
       }
+
       const { data } = await query;
       setMessages(data || []);
     };
 
     fetchMessages();
 
-    const channel = supabase.channel(`chat-${selectedTarget.id}`)
+    // Subscribe to new messages for the current target
+    const channel = supabase.channel(`room-${selectedTarget.id}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
-        setMessages(prev => [...prev, payload.new as Message]);
+        const newMsg = payload.new as Message;
+        // Logic to ensure message belongs in current view
+        if (newMsg.group_id === selectedTarget.id || 
+           (newMsg.sender_id === selectedTarget.id && newMsg.receiver_id === currentUser.id) ||
+           (newMsg.sender_id === currentUser.id && newMsg.receiver_id === selectedTarget.id)) {
+            setMessages(prev => [...prev, newMsg]);
+        }
       }).subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [selectedTarget, currentUser]);
+  }, [selectedTarget, currentUser?.id]);
 
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!groupName.trim()) return;
+    if (!groupName.trim() || !currentUser?.id) return;
 
     const { data, error } = await supabase.from("groups")
       .insert([{ name: groupName, description: groupDesc, created_by: currentUser.id }])
-      .select()
-      .single();
+      .select().single();
 
     if (error) {
-      alert("Group Error: " + error.message);
+      alert("Error creating group: " + error.message);
     } else {
       setSuggestedGroups(prev => [data, ...prev]);
       setShowCreateGroup(false);
@@ -112,7 +122,7 @@ export default function MessagesPage() {
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !selectedTarget) return;
+    if (!newMessage.trim() || !selectedTarget || !currentUser?.id) return;
 
     const isGroup = !("email" in selectedTarget);
     const { error } = await supabase.from("messages").insert([{
@@ -122,44 +132,46 @@ export default function MessagesPage() {
       group_id: isGroup ? selectedTarget.id : null
     }]);
 
-    if (!error) setNewMessage("");
-    else alert("Send failed: " + error.message);
+    if (!error) {
+      setNewMessage("");
+      scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   };
 
-  useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-
-  if (loading) return <div className="loader">Connecting...</div>;
+  // If loading or no user, show a basic message to prevent 'id' of null error
+  if (loading) return <div className="loading">Checking Authentication...</div>;
+  if (!currentUser) return <div className="loading">Please log in to view messages.</div>;
 
   return (
-    <div className="messenger">
+    <div className="container">
       <div className="sidebar">
-        <div className="nav-tabs">
+        <div className="tabs">
           <button className={view === "chats" ? "active" : ""} onClick={() => setView("chats")}>Inbox</button>
           <button className={view === "discover" ? "active" : ""} onClick={() => setView("discover")}>Explore</button>
         </div>
 
-        <div className="scroll-area">
+        <div className="list-content">
           {view === "chats" ? (
             <>
-              <p className="label">SUGGESTED PROS</p>
+              <p className="section-title">SUGGESTED PROS</p>
               {suggestedUsers.map(u => (
-                <div key={u.id} className={`user-row ${selectedTarget?.id === u.id ? 'active' : ''}`} onClick={() => setSelectedTarget(u)}>
+                <div key={u.id} className={`row ${selectedTarget?.id === u.id ? 'active' : ''}`} onClick={() => setSelectedTarget(u)}>
                   <div className="avatar">{u.full_name?.[0] || u.email[0]}</div>
-                  <div className="info">
-                    <span className="name">{u.full_name || u.email.split('@')[0]}</span>
-                    <span className="cat">{u.category || 'Professional'}</span>
+                  <div className="details">
+                    <div className="name">{u.full_name || u.email.split('@')[0]}</div>
+                    <div className="meta">{u.category}</div>
                   </div>
                 </div>
               ))}
             </>
           ) : (
             <div className="explore">
-              <button className="create-btn" onClick={() => setShowCreateGroup(true)}>+ Create New Group</button>
-              <p className="label">PUBLIC GROUPS</p>
+              <button className="create-btn" onClick={() => setShowCreateGroup(true)}>+ New Group</button>
+              <p className="section-title">PUBLIC GROUPS</p>
               {suggestedGroups.map(g => (
-                <div key={g.id} className={`user-row ${selectedTarget?.id === g.id ? 'active' : ''}`} onClick={() => setSelectedTarget(g)}>
-                  <div className="avatar group-av">#</div>
-                  <span className="name">{g.name}</span>
+                <div key={g.id} className={`row ${selectedTarget?.id === g.id ? 'active' : ''}`} onClick={() => setSelectedTarget(g)}>
+                  <div className="avatar group">#</div>
+                  <div className="name">{g.name}</div>
                 </div>
               ))}
             </div>
@@ -167,78 +179,79 @@ export default function MessagesPage() {
         </div>
       </div>
 
-      <div className="main-chat">
+      <div className="chat-window">
         {selectedTarget ? (
           <>
-            <div className="chat-top">
+            <div className="header">
               {"email" in selectedTarget ? (selectedTarget.full_name || selectedTarget.email) : selectedTarget.name}
             </div>
-            <div className="msgs">
+            <div className="messages">
               {messages.map((m, i) => (
-                <div key={m.id || i} className={`bubble ${m.sender_id === currentUser?.id ? 'me' : 'them'}`}>
+                <div key={m.id || i} className={`bubble ${m.sender_id === currentUser.id ? 'sent' : 'received'}`}>
                   {m.text}
                 </div>
               ))}
               <div ref={scrollRef} />
             </div>
-            <form className="input-bar" onSubmit={sendMessage}>
+            <form className="input-box" onSubmit={sendMessage}>
               <input value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Type a message..." />
               <button type="submit">SEND</button>
             </form>
           </>
         ) : (
-          <div className="welcome">Select a user to start a conversation</div>
+          <div className="empty">Select a conversation</div>
         )}
       </div>
 
       {showCreateGroup && (
-        <div className="overlay">
+        <div className="modal-bg">
           <form className="modal" onSubmit={handleCreateGroup}>
-            <h3>Create Group</h3>
-            <input placeholder="Name" value={groupName} onChange={e => setGroupName(e.target.value)} required />
+            <h3>Create Pro Group</h3>
+            <input placeholder="Group Name" value={groupName} onChange={e => setGroupName(e.target.value)} required />
             <textarea placeholder="Description" value={groupDesc} onChange={e => setGroupDesc(e.target.value)} />
-            <div className="btns">
+            <div className="modal-btns">
               <button type="button" onClick={() => setShowCreateGroup(false)}>Cancel</button>
-              <button type="submit" className="prime">Create</button>
+              <button type="submit" className="confirm-btn">Create</button>
             </div>
           </form>
         </div>
       )}
 
       <style jsx>{`
-        .messenger { display: flex; height: 100vh; background: #0f172a; color: white; font-family: sans-serif; }
+        .container { display: flex; height: 100vh; background: #0f172a; color: white; font-family: sans-serif; }
         .sidebar { width: 300px; border-right: 1px solid #1e293b; display: flex; flex-direction: column; background: #020617; }
-        .nav-tabs { display: flex; background: #1e293b; }
-        .nav-tabs button { flex: 1; padding: 15px; background: none; border: none; color: #94a3b8; cursor: pointer; }
-        .nav-tabs button.active { color: #3b82f6; border-bottom: 2px solid #3b82f6; }
-        .scroll-area { flex: 1; overflow-y: auto; padding: 15px; }
-        .label { font-size: 10px; color: #475569; margin: 20px 0 10px; letter-spacing: 1px; }
-        .user-row { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 8px; cursor: pointer; margin-bottom: 5px; }
-        .user-row:hover { background: #1e293b; }
-        .user-row.active { background: #3b82f6; }
-        .avatar { width: 36px; height: 36px; background: #334155; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; }
-        .group-av { background: #10b981; }
-        .info { display: flex; flex-direction: column; }
-        .name { font-size: 14px; font-weight: 500; }
-        .cat { font-size: 11px; color: #94a3b8; }
-        .create-btn { width: 100%; padding: 10px; background: #3b82f6; border: none; color: white; border-radius: 6px; cursor: pointer; font-weight: bold; }
-        .main-chat { flex: 1; display: flex; flex-direction: column; }
-        .chat-top { padding: 20px; border-bottom: 1px solid #1e293b; font-weight: bold; background: #020617; }
-        .msgs { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .tabs { display: flex; border-bottom: 1px solid #1e293b; }
+        .tabs button { flex: 1; padding: 15px; background: none; border: none; color: #64748b; cursor: pointer; }
+        .tabs button.active { color: #3b82f6; border-bottom: 2px solid #3b82f6; background: #161e2e; }
+        .list-content { flex: 1; overflow-y: auto; padding: 15px; }
+        .section-title { font-size: 10px; color: #475569; margin: 20px 0 10px; letter-spacing: 1px; }
+        .row { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 8px; cursor: pointer; margin-bottom: 5px; }
+        .row:hover { background: #1e293b; }
+        .row.active { background: #3b82f6; }
+        .avatar { width: 36px; height: 36px; background: #334155; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; flex-shrink: 0; }
+        .avatar.group { background: #10b981; }
+        .details { overflow: hidden; }
+        .name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .meta { font-size: 11px; color: #94a3b8; }
+        .create-btn { width: 100%; padding: 10px; background: #3b82f6; border: none; color: white; border-radius: 6px; cursor: pointer; font-weight: bold; margin-bottom: 10px; }
+        .chat-window { flex: 1; display: flex; flex-direction: column; }
+        .header { padding: 20px; border-bottom: 1px solid #1e293b; font-weight: bold; background: #020617; }
+        .messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
         .bubble { max-width: 70%; padding: 10px 15px; border-radius: 15px; font-size: 14px; }
-        .me { align-self: flex-end; background: #3b82f6; }
-        .them { align-self: flex-start; background: #1e293b; }
-        .input-bar { padding: 20px; display: flex; gap: 10px; background: #020617; border-top: 1px solid #1e293b; }
-        .input-bar input { flex: 1; padding: 12px; background: #1e293b; border: none; color: white; border-radius: 8px; }
-        .input-bar button { background: #3b82f6; border: none; color: white; padding: 0 20px; border-radius: 8px; cursor: pointer; font-weight: bold; }
-        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 50; }
+        .sent { align-self: flex-end; background: #3b82f6; }
+        .received { align-self: flex-start; background: #1e293b; }
+        .input-box { padding: 20px; display: flex; gap: 10px; border-top: 1px solid #1e293b; background: #020617; }
+        .input-box input { flex: 1; padding: 12px; background: #1e293b; border: none; color: white; border-radius: 8px; }
+        .input-box button { background: #3b82f6; border: none; color: white; padding: 0 20px; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 50; }
         .modal { background: #1e293b; padding: 25px; border-radius: 12px; width: 350px; display: flex; flex-direction: column; gap: 15px; }
         .modal input, .modal textarea { padding: 10px; background: #0f172a; border: 1px solid #334155; color: white; border-radius: 6px; }
-        .btns { display: flex; justify-content: flex-end; gap: 10px; }
-        .prime { background: #3b82f6; border: none; padding: 8px 20px; color: white; border-radius: 6px; cursor: pointer; }
-        .welcome { flex: 1; display: flex; align-items: center; justify-content: center; color: #475569; }
-        .loader { height: 100vh; display: flex; align-items: center; justify-content: center; color: white; }
+        .modal-btns { display: flex; justify-content: flex-end; gap: 10px; }
+        .confirm-btn { background: #3b82f6; border: none; padding: 8px 20px; color: white; border-radius: 6px; cursor: pointer; }
+        .empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #475569; }
+        .loading { height: 100vh; display: flex; align-items: center; justify-content: center; color: white; }
       `}</style>
     </div>
   );
+}
 }
