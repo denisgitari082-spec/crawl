@@ -1,6 +1,6 @@
 // register.tsx
 import { useState } from "react";
-import { supabase } from "../src/lib/supabaseClient";
+import { supabase } from "../../src/lib/supabaseClient";
 import { useRouter } from "next/router";
 
 export default function Register() {
@@ -181,5 +181,6 @@ export default function Register() {
     </div>
   );
 }
+
 
 
