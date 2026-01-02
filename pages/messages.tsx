@@ -253,5 +253,5 @@ export default function MessagesPage() {
       `}</style>
     </div>
   );
-}
+
 }
