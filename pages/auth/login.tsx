@@ -1,6 +1,6 @@
 // pages/auth/login.tsx
 import { useState, useEffect } from "react";
-import { supabase } from "../src/lib/supabaseClient";
+import { supabase } from "../../src/lib/supabaseClient";
 import { useRouter } from "next/router";
 
 export default function Login() {
@@ -157,4 +157,5 @@ export default function Login() {
     </div>
   );
 }
+
 
