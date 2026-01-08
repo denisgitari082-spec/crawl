@@ -1,19 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../src/lib/supabaseClient";
 
-// --- Types ---
+// 1. Update Type
 type Group = {
   id: string;
   name: string;
   category: string;
+  avatar_url?: string; // Add this
   created_by: string;
   created_at: string;
   member_count?: number;
-  is_member?: boolean; // Track if current user is inside
+  is_member?: boolean;
 };
+
+// 2. Add these inside GroupsPage component
 
 export default function GroupsPage() {
   const router = useRouter();
@@ -21,9 +24,26 @@ export default function GroupsPage() {
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+const [selectedFile, setSelectedFile] = useState<File | null>(null);
+const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+const [uploading, setUploading] = useState(false);
+const [editingGroup, setEditingGroup] = useState<Group | null>(null);
+const [showEditModal, setShowEditModal] = useState(false);
+const [searchQuery, setSearchQuery] = useState("");
   
   const [newName, setNewName] = useState("");
   const [newCat, setNewCat] = useState("General");
+
+
+
+  const filteredGroups = groups.filter((group) => {
+  const query = searchQuery.toLowerCase();
+  return (
+    group.name.toLowerCase().includes(query) ||
+    group.category.toLowerCase().includes(query)
+  );
+});
 
   useEffect(() => {
     checkUserAndFetch();
@@ -38,6 +58,78 @@ export default function GroupsPage() {
       fetchGroups(null);
     }
   };
+
+  const handleUpdateGroup = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!editingGroup || uploading) return;
+  setUploading(true);
+
+  try {
+    let publicUrl = editingGroup.avatar_url;
+
+    if (selectedFile) {
+      const fileExt = selectedFile.name.split('.').pop();
+      const fileName = `${editingGroup.id}-${Math.random()}.${fileExt}`;
+      const filePath = `group-icons/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('group-media')
+        .upload(filePath, selectedFile);
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from('group-media').getPublicUrl(filePath);
+      publicUrl = data.publicUrl;
+    }
+
+    const { error } = await supabase
+      .from("groups")
+      .update({ 
+        name: newName, 
+        category: newCat, 
+        avatar_url: publicUrl 
+      })
+      .eq("id", editingGroup.id);
+
+    if (error) throw error;
+
+    setShowEditModal(false);
+    setEditingGroup(null);
+    setSelectedFile(null);
+    setPreviewUrl(null);
+    checkUserAndFetch();
+  } catch (err) {
+    alert("Error updating group");
+  } finally {
+    setUploading(false);
+  }
+};
+const handleDeleteGroup = async () => {
+  if (!editingGroup) return;
+  const confirmDelete = confirm(`Are you sure you want to delete "${editingGroup.name}"? This cannot be undone.`);
+  
+  if (confirmDelete) {
+    setUploading(true);
+    try {
+      // Delete the group (Supabase will handle members if you have ON DELETE CASCADE, 
+      // otherwise delete members first)
+      const { error } = await supabase
+        .from("groups")
+        .delete()
+        .eq("id", editingGroup.id);
+
+      if (error) throw error;
+
+      setShowEditModal(false);
+      setEditingGroup(null);
+      checkUserAndFetch();
+    } catch (err) {
+      alert("Error deleting group");
+    } finally {
+      setUploading(false);
+    }
+  }
+};
 
   const fetchGroups = async (currentUserId: string | null) => {
     setLoading(true);
@@ -100,37 +192,65 @@ export default function GroupsPage() {
     }
   };
 
-  const handleCreateGroup = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userId) return;
+const handleCreateGroup = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!userId || uploading) return;
+  setUploading(true);
+
+  try {
+    let publicUrl = null;
+
+    if (selectedFile) {
+      const fileExt = selectedFile.name.split('.').pop();
+      const fileName = `${Math.random()}.${fileExt}`;
+      const filePath = `group-icons/${fileName}`;
+
+      // UPDATED: Changed bucket name to group-media
+      const { error: uploadError } = await supabase.storage
+        .from('group-media') 
+        .upload(filePath, selectedFile);
+
+      if (uploadError) throw uploadError;
+
+      // UPDATED: Changed bucket name to group-media
+      const { data } = supabase.storage.from('group-media').getPublicUrl(filePath);
+      publicUrl = data.publicUrl;
+    }
 
     const { data: groupData, error: groupError } = await supabase
       .from("groups")
-      .insert([{ name: newName, category: newCat, created_by: userId }])
-      .select()
-      .single();
+      .insert([{ 
+        name: newName, 
+        category: newCat, 
+        created_by: userId,
+        avatar_url: publicUrl 
+      }])
+      .select().single();
 
     if (!groupError) {
-      // Creator must be added to group_members automatically
-      await supabase.from("group_members").insert([
-        { group_id: groupData.id, user_id: userId }
-      ]);
-
+      await supabase.from("group_members").insert([{ group_id: groupData.id, user_id: userId }]);
       setShowCreateModal(false);
       setNewName("");
+      setSelectedFile(null);
+      setPreviewUrl(null);
       checkUserAndFetch();
     }
-  };
-
+  } catch (err) {
+    alert("Error creating group");
+  } finally {
+    setUploading(true); // Should be false, but check your local state flow
+    setUploading(false);
+  }
+};
   return (
     <div className="container">
       <header className="header">
         <div className="header-left">
-          <button onClick={() => router.back()} className="back-btn">
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M19 12H5M12 19l-7-7 7-7"/>
-            </svg>
-          </button>
+<button onClick={() => router.push("/")} className="back-btn">
+  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M19 12H5M12 19l-7-7 7-7"/>
+  </svg>
+</button>
           <h1>Community Hub</h1>
         </div>
         <button className="create-btn" onClick={() => setShowCreateModal(true)}>
@@ -142,9 +262,15 @@ export default function GroupsPage() {
         </button>
       </header>
 
-      <div className="search-bar">
-        <input type="text" placeholder="Search by name or category..." className="search-input" />
-      </div>
+<div className="search-bar">
+  <input 
+    type="text" 
+    placeholder="Search by name or category..." 
+    className="search-input" 
+    value={searchQuery}
+    onChange={(e) => setSearchQuery(e.target.value)}
+  />
+</div>
 
       {loading ? (
         <div className="loader">
@@ -152,38 +278,131 @@ export default function GroupsPage() {
            <p>Syncing groups...</p>
         </div>
       ) : (
-        <div className="groups-grid">
-          {groups.map((group) => (
-            <div key={group.id} className="group-card">
-              <div className="group-info">
-                <div className="group-avatar">{group.name[0]}</div>
-                <div className="group-details">
-                  <h3>{group.name}</h3>
-                  <span className="member-tag">{group.member_count} Members</span>
-                </div>
+ <div className="groups-grid">
+  {filteredGroups.length > 0 ? (
+    filteredGroups.map((group) => (
+      <div key={group.id} className="group-card">
+        
+        {/* TOP SECTION: Avatar and Text side-by-side */}
+        <div className="group-info">
+          <div 
+            className={`group-avatar ${group.created_by === userId ? 'admin-editable' : ''}`}
+            onClick={() => {
+              if (group.created_by === userId) {
+                setEditingGroup(group);
+                setNewName(group.name);
+                setNewCat(group.category);
+                setPreviewUrl(group.avatar_url || null);
+                setShowEditModal(true);
+              }
+            }}
+          >
+            {group.avatar_url ? (
+              <img 
+                src={group.avatar_url} 
+                alt={group.name} 
+                style={{ width: '100%', height: '100%', borderRadius: '10px', objectFit: 'cover' }} 
+              />
+            ) : (
+              <span>{group.name[0]}</span>
+            )}
+
+            {group.created_by === userId && (
+              <div className="edit-overlay">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="white">
+                  <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                </svg>
               </div>
-              <div className="group-footer">
-                <span className="cat-badge">{group.category}</span>
-                {group.is_member ? (
-                  <button 
-                   onClick={() => router.push(`/admin?id=${group.id}`)}
-                    className="view-btn chat-mode"
-                  >
-                    Open Chat
-                  </button>
-                ) : (
-                  <button 
-                    onClick={() => joinGroup(group.id)} 
-                    className="view-btn join-mode"
-                  >
-                    Join Group
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+            )}
+          </div>
+
+          <div className="group-text">
+            <h3 className="group-name-title">{group.name}</h3>
+            <p className="group-stats">{group.member_count} members</p>
+          </div>
         </div>
+
+        {/* BOTTOM SECTION: Category and Action Button */}
+        <div className="group-footer">
+          <span className="cat-badge">{group.category}</span>
+          {group.is_member ? (
+            <button 
+              onClick={() => router.push(`/admin?id=${group.id}`)}
+              className="view-btn chat-mode"
+            >
+              Open Chat
+            </button>
+          ) : (
+            <button 
+              onClick={() => joinGroup(group.id)} 
+              className="view-btn join-mode"
+            >
+              Join Group
+            </button>
+          )}
+        </div>
+        
+      </div>
+    ))
+  ) : (
+    <div className="no-results">
+      <p>No communities found matching "{searchQuery}"</p>
+    </div>
+  )}
+</div>
       )}
+
+{showEditModal && (
+  <div className="modal-overlay">
+    <div className="modal">
+      <div className="modal-header">
+        <h2>Edit {editingGroup?.name}</h2>
+        <button className="delete-icon-btn" onClick={handleDeleteGroup} title="Delete Group">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#ef4444" strokeWidth="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+        </button>
+      </div>
+      
+      <form onSubmit={handleUpdateGroup}>
+        <div className="avatar-upload">
+          <div className="preview-circle" onClick={() => fileInputRef.current?.click()}>
+            {previewUrl ? <img src={previewUrl} alt="Preview" /> : <span>+</span>}
+          </div>
+          <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              setSelectedFile(file);
+              setPreviewUrl(URL.createObjectURL(file));
+            }
+          }} />
+          <label>Change Icon</label>
+        </div>
+        
+        <div className="field">
+          <label>Name</label>
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} required />
+        </div>
+        
+        <div className="field">
+          <label>Category</label>
+          <select value={newCat} onChange={(e) => setNewCat(e.target.value)}>
+            <option value="General">General</option>
+            <option value="Construction">Construction</option>
+            <option value="Engineering">Engineering</option>
+            <option value="Design">Design</option>
+          </select>
+        </div>
+        
+        <div className="modal-actions">
+          <button type="button" className="cancel-btn" onClick={() => setShowEditModal(false)}>Cancel</button>
+          <button type="submit" className="confirm-btn">{uploading ? "Saving..." : "Save Changes"}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+)}
 
       {showCreateModal && (
         <div className="modal-overlay">
@@ -207,25 +426,167 @@ export default function GroupsPage() {
                 <button type="button" className="cancel-btn" onClick={() => setShowCreateModal(false)}>Cancel</button>
                 <button type="submit" className="confirm-btn">Create</button>
               </div>
+
+              {/* Insert this inside the <form> before the Name field */}
+<div className="avatar-upload">
+  <div className="preview-circle" onClick={() => fileInputRef.current?.click()}>
+    {previewUrl ? <img src={previewUrl} alt="Preview" /> : <span>+</span>}
+  </div>
+  <input 
+    type="file" 
+    ref={fileInputRef} 
+    hidden 
+    accept="image/*" 
+    onChange={(e) => {
+      const file = e.target.files?.[0];
+      if (file) {
+        setSelectedFile(file);
+        setPreviewUrl(URL.createObjectURL(file));
+      }
+    }} 
+  />
+  <label>Upload Icon</label>
+</div>
             </form>
           </div>
         </div>
       )}
 
       <style jsx>{`
+
+      .avatar-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 10px;
+  border: 1px dashed #334155;
+  border-radius: 12px;
+}
+  .admin-editable {
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+.admin-editable:hover {
+  transform: scale(1.05);
+}
+.edit-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s;
+  border-radius: 10px;
+}
+.admin-editable:hover .edit-overlay {
+  opacity: 1;
+}
+  .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.delete-icon-btn {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.delete-icon-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.group-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.group-name-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: white;
+}
+
+.group-stats {
+  margin: 2px 0 0 0;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.preview-circle {
+  width: 64px;
+  height: 64px;
+  background: #0f172a;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  overflow: hidden;
+  font-size: 24px;
+  color: #3b82f6;
+}
+
+.preview-circle img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-upload label {
+  font-size: 12px;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
         .container { background: #0f172a; min-height: 100vh; color: white; padding: 20px; font-family: sans-serif; }
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
         .header-left { display: flex; align-items: center; gap: 12px; }
         .back-btn { background: #1e293b; border: none; color: #94a3b8; padding: 8px; border-radius: 8px; cursor: pointer; }
         .create-btn { background: #3b82f6; border: none; color: white; padding: 10px 16px; border-radius: 10px; font-weight: 600; display: flex; align-items: center; gap: 8px; cursor: pointer; }
-        .search-input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #334155; background: #1e293b; color: white; margin-bottom: 20px; }
+        .search-input { width: 97%; padding: 12px; border-radius: 10px; border: 1px solid #334155; background: #1e293b; color: white; margin-bottom: 20px; }
 
-        .groups-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-        .group-card { background: #1e293b; border-radius: 16px; padding: 20px; border: 1px solid #334155; }
-        .group-info { display: flex; align-items: center; gap: 12px; margin-bottom: 15px; }
+        .groups-grid { 
+  display: grid; 
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); 
+  gap: 16px; 
+  align-items: start; /* This prevents cards from stretching to match the tallest card */
+}
+        .group-card { 
+  background: #1e293b; 
+  border-radius: 16px; 
+  padding: 16px; /* Slightly reduced padding for a tighter look */
+  border: 1px solid #334155; 
+  height: fit-content; /* Force card to only be as tall as its content */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+        .group-info { 
+  display: flex; 
+  align-items: center; 
+  gap: 12px; 
+  /* Remove margin-bottom since the card has a gap now */
+}
         .group-avatar { width: 44px; height: 44px; background: #334155; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #3b82f6; }
         
-        .group-footer { display: flex; justify-content: space-between; align-items: center; }
+        .group-footer { 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+  margin-top: 4px; /* Small push from the info section */
+}
         .cat-badge { background: rgba(59, 130, 246, 0.1); color: #60a5fa; padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; }
         
         .view-btn { padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; }

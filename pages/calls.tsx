@@ -33,6 +33,7 @@ const hasStarted = useRef(false); // Add this ref
   const [callStatus, setCallStatus] = useState("Initializing...");
   const [isPoorConnection, setIsPoorConnection] = useState(false);
   const [targetName, setTargetName] = useState("User");
+const [userId, setUserId] = useState<string | null>(null);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -56,23 +57,42 @@ const hasStarted = useRef(false); // Add this ref
     }
   }, [remoteStream, callStatus]);
 
-
   useEffect(() => {
-    if (!router.isReady || !targetId || hasStarted.current) return;
-  hasStarted.current = true; // Mark as started immediately
-    if (!router.isReady || !targetId) return;
+  if (role === "caller" && callStatus !== "Connected") {
+    const timeout = setTimeout(() => {
+      if (!remoteStream) {
+        console.log("No one joined the call. Closing...");
+        endCall();
+      }
+    }, 30000); // 60 seconds
 
-    const cleanup = () => {
-      if (statsInterval.current) clearInterval(statsInterval.current);
-      if (peerRef.current) peerRef.current.destroy();
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      if (localStream) localStream.getTracks().forEach(t => t.stop());
-    };
+    return () => clearTimeout(timeout);
+  }
+}, [role, remoteStream, callStatus]);
 
-    async function initCall() {
+
+useEffect(() => {
+  // Wait for router to be ready
+  if (!router.isReady || !targetId) return;
+  
+  // Prevent double execution in React Strict Mode
+  if (hasStarted.current) return;
+  hasStarted.current = true;
+
+  const cleanup = () => {
+    if (statsInterval.current) clearInterval(statsInterval.current);
+    if (peerRef.current) peerRef.current.destroy();
+    if (channelRef.current) supabase.removeChannel(channelRef.current);
+    if (localStream) localStream.getTracks().forEach(t => t.stop());
+  };
+
+  async function initCall() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       const myId = user.id;
+      setUserId(myId);
+
+      const allSignals = useRef<any[]>([]);
 
       // Fetch Target Profile
       const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", targetId).single();
@@ -96,20 +116,25 @@ const hasStarted = useRef(false); // Add this ref
 
         // Setup Supabase Channel with No-Ack for lower latency
         const channelIds = [myId, targetId as string].sort();
-        const callChannel = supabase.channel(`call:${channelIds[0]}_${channelIds[1]}`, {
-          config: { broadcast: { ack: false, self: false } }
+                const callChannel = supabase.channel(`calls:${channelIds[0]}_${channelIds[1]}`, {
+  config: { broadcast: { ack: false, self: false }, presence: { key: myId } }
         });
+
+
         channelRef.current = callChannel;
 
-        p.on("signal", (data) => {
-          latestSignal.current = data;
-          callChannel.send({
-            type: "broadcast",
-            event: "signal",
-            payload: { from: myId, signal: data, sentAt: Date.now() },
-          });
-        });
-
+p.on("signal", (data) => {
+  // Save the very first signal (The Offer)
+  if (!latestSignal.current) {
+    latestSignal.current = data;
+  }
+  
+  callChannel.send({
+    type: "broadcast",
+    event: "signal",
+    payload: { from: myId, signal: data, sentAt: Date.now() },
+  });
+});
         p.on("stream", (remoteMediaStream) => {
           setRemoteStream(remoteMediaStream);
           setCallStatus("Connected");
@@ -140,35 +165,57 @@ const hasStarted = useRef(false); // Add this ref
             if (Date.now() - payload.sentAt > 5000) return;
             if (payload.from !== myId) p.signal(payload.signal);
           })
-          .on("broadcast", { event: "ready" }, () => {
-            if (role === "caller" && latestSignal.current) {
-              callChannel.send({
-                type: "broadcast",
-                event: "signal",
-                payload: { from: myId, signal: latestSignal.current, sentAt: Date.now() },
-              });
-            }
-          })
-          .on("broadcast", { event: "hangup" }, () => {
-            setCallStatus("Call Ended");
-            cleanup();
-            setTimeout(() => window.close(), 1000);
-          })
-// Find this block in your subscribe status
-.subscribe((status) => {
-  if (status === "SUBSCRIBED") {
-    setCallStatus(role === "caller" ? "Ringing..." : "Connecting...");
-    
-    // Only the receiver should send the "ready" ping to wake up the caller
-    if (role === "receiver") {
-      channelRef.current.send({ 
-        type: "broadcast", 
-        event: "ready", 
-        payload: { from: myId } 
-      });
-    }
+          .on("presence", { event: "leave" }, ({ leftPresences }) => {
+  // If the caller leaves unexpectedly, you might want to end the call
+  const callerLeft = leftPresences.some(p => p.role === 'caller');
+  if (callerLeft) {
+    console.log("Caller disconnected abruptly");
   }
-});
+})
+          .on("presence", { event: "sync" }, () => {
+    const state = callChannel.presenceState();
+    console.log("Current users in call:", Object.keys(state).length);
+  })
+.on("broadcast", { event: "ready" }, () => {
+  if (role === "caller" && latestSignal.current) {
+    // Send the SAVED offer, not the newest trickle data
+    callChannel.send({
+      type: "broadcast",
+      event: "signal",
+      payload: { from: myId, signal: latestSignal.current, sentAt: Date.now() },
+    });
+  }
+})
+.on("broadcast", { event: "hangup" }, ({ payload }) => {
+  // If the person who left was the CALLER, everyone must leave
+  // Or if you want people to stay even if caller leaves, remove the 'payload.isGlobal' check
+  if (payload.isGlobal) {
+    setCallStatus("Call Ended");
+    localStream?.getTracks().forEach(t => t.stop());
+    setTimeout(() => {
+      router.push(`/admin?id=${router.query.id}`);
+    }, 1000);
+  } else {
+    // Just a member left, show a notification or clear their video
+    alert("A member left the call");
+  }
+})
+// Find this block in your subscribe status
+.subscribe(async (status) => {
+    if (status === "SUBSCRIBED") {
+      // TRACK the user so presence knows they are here
+      await callChannel.track({ user_id: myId, joinedAt: Date.now() });
+      
+      setCallStatus(role === "caller" ? "Ringing..." : "Connecting...");
+      if (role === "receiver") {
+        callChannel.send({ 
+          type: "broadcast", 
+          event: "ready", 
+          payload: { from: myId } 
+        });
+      }
+    }
+  });
         peerRef.current = p;
       } catch (err) {
         setCallStatus("Access Denied");
@@ -180,30 +227,50 @@ const hasStarted = useRef(false); // Add this ref
   }, [router.isReady, targetId]);
 
 const endCall = async () => {
-  const { data: { user } } = await supabase.auth.getUser();
+  // Capture IDs immediately to prevent closure issues
+  const currentGroupId = router.query.id;
+  const isCaller = role === "caller";
   
-  // 1. Tell the Peer-to-Peer channel to hang up (for the Call window)
-  channelRef.current?.send({ 
-    type: "broadcast", 
-    event: "hangup", 
-    payload: { sentAt: Date.now() } 
-  });
+  // 1. Get the latest presence count
+  const presenceState = channelRef.current?.presenceState();
+  const participantCount = presenceState ? Object.keys(presenceState).length : 0;
 
-  // 2. Tell the recipient's INBOX to stop ringing (for the Messages window)
-  const inboxChannel = supabase.channel(`inbox:${targetId}`);
-  await inboxChannel.subscribe(async (status) => {
-    if (status === 'SUBSCRIBED') {
-      await inboxChannel.send({
-        type: 'broadcast',
-        event: 'call-cancelled', // This is the event your MessagesPage will listen for
-        payload: { callerId: user?.id, type: type }
-      });
-      // Small delay to ensure message sends before window closes
-      setTimeout(() => window.close(), 200);
+  console.log(`Ending call. Participants: ${participantCount}, Role: ${role}`);
+
+  try {
+    // 2. Logic: If I am the caller OR I am the last person left (count is 1)
+    if (isCaller || participantCount <= 1) {
+      const { error } = await supabase
+        .from("group_posts")
+        .update({ is_call: false, content: "Call ended" })
+        .eq("group_id", currentGroupId)
+        .eq("is_call", true);
+        
+      if (error) console.error("Database update failed:", error);
     }
-  });
-};
 
+    // 3. Stop hardware
+    localStream?.getTracks().forEach(t => t.stop());
+
+    // 4. Signal others
+    channelRef.current?.send({ 
+      type: "broadcast", 
+      event: "hangup", 
+      payload: { from: userId, isGlobal: isCaller } 
+    });
+
+    // 5. Explicitly remove the channel before leaving
+    if (channelRef.current) {
+      await supabase.removeChannel(channelRef.current);
+    }
+
+  } catch (err) {
+    console.error("Error during hangup:", err);
+  } finally {
+    // 6. Always redirect back to the specific group admin page
+    router.push(`/admin?id=${currentGroupId}`);
+  }
+};
   return (
     <div className="call-screen">
       {isPoorConnection && <div className="network-warning">⚠️ Poor connection detected</div>}
@@ -233,7 +300,8 @@ const endCall = async () => {
         </div>
       </div>
 
-      <div className="controls-bar">
+<div className="controls-bar">
+  {/* Mute/Unmute Button */}
   <button 
     onClick={() => {
       localStream?.getAudioTracks().forEach(t => t.enabled = !t.enabled);
@@ -259,6 +327,8 @@ const endCall = async () => {
       </svg>
     )}
   </button>
+
+  {/* Video On/Off Button */}
   {type === "video" && (
     <button 
       onClick={() => {
@@ -280,13 +350,15 @@ const endCall = async () => {
         </svg>
       )}
     </button>
-        )}
-          <button onClick={endCall} className="btn hangup" title="End Call">
+  )}
+
+  {/* End Call Button */}
+  <button onClick={endCall} className="btn hangup" title="End Call">
     <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"></path>
     </svg>
   </button>
-      </div>
+</div>
 
       <style jsx>{`
         .call-screen { height: 100vh; width: 100vw; background: #0b141a; display: flex; flex-direction: column; color: white; font-family: sans-serif; position: relative; overflow: hidden; }
@@ -305,8 +377,7 @@ const endCall = async () => {
         .btn.danger { background: #ef4444; }
         .btn.hangup { background: #dc2626; transform: rotate(135deg); }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-
-                .controls-bar { 
+        .controls-bar { 
   height: 110px; 
   background: #1e293b; 
   display: flex; 
@@ -328,8 +399,6 @@ const endCall = async () => {
 .btn:hover svg {
   transform: scale(1.1);
 }
-      
-
       `}</style>
     </div>
   );

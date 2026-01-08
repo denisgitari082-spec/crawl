@@ -64,10 +64,7 @@ export default function AddEditService() {
     setErrorMsg("");
     setWarning("");
 
-    if (!contact.startsWith("254")) {
-      setWarning("⚠️ Please include the country code (e.g. 254712345678).");
-      return;
-    }
+
 
     setLoading(true);
 
@@ -158,22 +155,7 @@ export default function AddEditService() {
             required
             className="input"
           />
-          <input
-            type="text"
-            placeholder="Provider Name"
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-            required
-            className="input"
-          />
-          <input
-            type="tel"
-            placeholder="Phone Number (e.g. 254712345678)"
-            value={contact}
-            onChange={(e) => setContact(e.target.value)}
-            required
-            className="input"
-          />
+
           <input
             type="text"
             placeholder="Job Location (e.g. Nairobi)"

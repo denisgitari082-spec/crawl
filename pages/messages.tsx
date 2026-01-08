@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useMemo } from "react";
+import { useRouter } from "next/router";
 import { supabase } from "../src/lib/supabaseClient";
 
 type Message = {
@@ -17,6 +18,7 @@ type Message = {
 type ChatUser = {
   id: string;
   email: string;
+  avatar_url?: string;
   full_name: string;
   unread_count?: number;
   last_message_at?: string;
@@ -25,6 +27,7 @@ type ChatUser = {
 type Group = { id: string; name: string; description: string };
 
 export default function MessagesPage() {
+  const router = useRouter();
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [view, setView] = useState<"chats" | "discover">("chats");
   const [searchQuery, setSearchQuery] = useState("");
@@ -35,6 +38,9 @@ export default function MessagesPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [uploading, setUploading] = useState(false);
+  const { user } = router.query;
+  // --- SIDEBAR STATE ---
+const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // --- NEW FEATURES STATE ---
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -51,6 +57,69 @@ const messageListRef = useRef<HTMLDivElement>(null); // To track the scrollable 
 
 // Inside MessagesPage component
 const [incomingCall, setIncomingCall] = useState<any>(null);
+
+useEffect(() => {
+  if (!router.isReady) return;
+  if (!user || typeof user !== "string") return;
+  if (!currentUser) return;
+
+  const initChatFromUrl = async () => {
+    // 1️⃣ Fetch user profile
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, avatar_url")
+      .eq("id", user)
+      .single();
+
+    if (error || !profile) {
+      console.error("Failed to load chat user", error);
+      return;
+    }
+
+    // 2️⃣ SET THE CHAT TARGET (THIS WAS MISSING)
+    setSelectedTarget(profile);
+
+    // 3️⃣ Load messages
+    openChatWithUser(profile.id);
+  };
+
+  initChatFromUrl();
+
+  // Clean URL
+  router.replace("/messages", undefined, { shallow: true });
+}, [router.isReady, user, currentUser]);
+
+
+function setActiveUserId(userId: string) {
+  if (selectedTargetRef.current && "id" in selectedTargetRef.current) {
+    selectedTargetRef.current.id = userId;
+  }
+}
+
+const openChatWithUser = async (otherUserId: string) => {
+  if (!currentUser?.id || !otherUserId || otherUserId === currentUser.id) return;
+
+  setActiveUserId(otherUserId);
+
+  const { data, error } = await supabase
+    .from("messages")
+    .select("*")
+    .in("sender_id", [currentUser.id, otherUserId])
+    .in("receiver_id", [currentUser.id, otherUserId])
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  setMessages(data || []);
+};
+
+
+
+
+
 
 useEffect(() => {
   if (!currentUser) return;
@@ -77,6 +146,7 @@ const handleAcceptCall = () => {
   );
   setIncomingCall(null);
 };
+
 
 
 const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -200,7 +270,7 @@ useEffect(() => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setCurrentUser(user);
-        const { data: uData } = await supabase.from("profiles").select("id, email, full_name").neq("id", user.id);
+        const { data: uData } = await supabase.from("profiles").select("id, email, full_name, avatar_url").neq("id", user.id);
         const { data: gData } = await supabase.from("groups").select("*");
         setSuggestedUsers(uData || []);
         setSuggestedGroups(gData || []);
@@ -242,6 +312,7 @@ const fetchChatHistory = async (userId: string) => {
           id: chat.id,
           full_name: chat.full_name,
           email: chat.email,
+           avatar_url: chat.avatar_url,
           // If the chat is currently open, show 0 unread to the user immediately
           unread_count: isCurrentlyOpen ? 0 : Number(chat.unread_count),
           last_message_at: chat.last_message_at
@@ -513,118 +584,202 @@ const loadMsgs = async () => {
     }
   };
 
-  return (
-    <div className="messenger-container" onClick={() => { setMenuOpenId(null); setSidebarMenuOpenId(null); }}>
-      <div className="sidebar">
-        <div className="sidebar-header">
-          <div className="tabs">
-            <button className={view === "chats" ? "active" : ""} onClick={() => setView("chats")}>Inbox</button>
-            <button className={view === "discover" ? "active" : ""} onClick={() => setView("discover")}>Explore</button>
-          </div>
+return (
+  <div className="messenger-container" onClick={() => { setMenuOpenId(null); setSidebarMenuOpenId(null); }}>
+    {/* Sidebar Section */}
+    <div className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
+      
+      {/* Home Navigator Button */}
+      <div className="nav-container">
+        <button 
+          className="nav-home-btn" 
+          onClick={() => window.location.href = '/'} 
+          title="Go to Homepage"
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" />
+          </svg>
+          {!isSidebarCollapsed && <span className="nav-text">Home</span>}
+        </button>
+      </div>
+
+      {/* Sidebar Collapse Toggle */}
+      <button 
+        className="collapse-toggle" 
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsSidebarCollapsed(!isSidebarCollapsed);
+        }}
+        title={isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+      >
+        {isSidebarCollapsed ? "→" : "←"}
+      </button>
+
+      <div className="sidebar-header">
+        <div className="tabs">
+          <button className={view === "chats" ? "active" : ""} onClick={() => setView("chats")}>
+            {isSidebarCollapsed ? "💬" : "Inbox"}
+          </button>
+          {!isSidebarCollapsed && (
+            <button className={view === "discover" ? "active" : ""} onClick={() => setView("discover")}>
+              Explore
+            </button>
+          )}
+        </div>
+        {!isSidebarCollapsed && (
           <div className="search-box">
             <input type="text" placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
           </div>
-        </div>
-
-        <div className="sidebar-content">
-          <p className="section-label">{view === "chats" ? "Recent" : "All Users"}</p>
-          {filteredItems.map(u => {
-            const isOnline = onlineUsers.includes(u.id);
-            return (
-              <div key={u.id} className={`item ${selectedTarget?.id === u.id ? 'active' : ''}`} onClick={() => setSelectedTarget(u)
-
-
-              }>
-                <div className="avatar-wrapper">
-                  <div className="avatar">{u.full_name?.[0]?.toUpperCase() || 'U'}</div>
-                  {isOnline && <div className="online-dot" />}
-                </div>
-
-                <div className="info">
-                  <span className="name">{u.full_name || u.email.split('@')[0]}</span>
-                  {isOnline ? <span className="active-now">Active now</span> : <span className="status">Offline</span>}
-                </div>
-
-                <div className="sidebar-meta">
-                  {(u.unread_count ?? 0) > 0 && (
-                    <div className="unread-badge">{u.unread_count}</div>
-                  )}
-
-                  {view === "chats" && (
-                    <div className="sidebar-item-actions">
-                      <button className="sidebar-dots" onClick={(e) => {
-                        e.stopPropagation();
-                        setSidebarMenuOpenId(u.id === sidebarMenuOpenId ? null : u.id);
-                      }}>︙</button>
-                      {sidebarMenuOpenId === u.id && (
-                        <div className="sidebar-menu">
-                          <button onClick={(e) => { e.stopPropagation(); handleMarkAsRead(u.id); }}>
-                            Mark as Read
-                          </button>
-                          <button onClick={(e) => { e.stopPropagation(); handleDeleteConversation(u.id); }} className="delete-btn">
-                            Delete Chat
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          {view === "discover" && suggestedGroups.map(g => (
-            <div key={g.id} className={`item ${selectedTarget?.id === g.id ? 'active' : ''}`} onClick={() => setSelectedTarget(g)}>
-              <div className="avatar grp">#</div>
-              <div className="info"><span className="name">{g.name}</span></div>
-            </div>
-          ))}
-        </div>
+        )}
       </div>
 
-      <div className="chat-window">
-        {selectedTarget ? (
-          <>
-<div className="chat-header">
-  <div className="header-left">
-    <strong>
-      {"full_name" in selectedTarget 
-        ? (selectedTarget.full_name || selectedTarget.email) 
-        : (selectedTarget as Group).name}
-    </strong>
-    {"email" in selectedTarget && onlineUsers.includes(selectedTarget.id) && (
-      <span className="header-online">● Online</span>
-    )}
-  </div>
+      <div className="sidebar-content">
+        {!isSidebarCollapsed && <p className="section-label">{view === "chats" ? "Recent" : "All Users"}</p>}
+        
+        {filteredItems.map(u => {
+          const isOnline = onlineUsers.includes(u.id);
+          return (
+            <div key={u.id} className={`item ${selectedTarget?.id === u.id ? 'active' : ''}`} onClick={() => setSelectedTarget(u)}>
+<div className="avatar-wrapper">
 
-  {incomingCall && (
-  <div className="call-modal">
-    <div className="modal-content">
-      <h3>Incoming {incomingCall.type} Call</h3>
-      <p>{incomingCall.callerName} is calling you...</p>
-      <div className="modal-actions">
-        <button className="accept" onClick={handleAcceptCall}>Accept</button>
-        <button className="decline" onClick={handleDeclineCall}>Decline</button>
-      </div>
-    </div>
-  </div>
-)}
+<div className="avatar">
+  {u.avatar_url ? (
+    <img
+      src={u.avatar_url}
+      alt={u.full_name}
+      className="avatar-img"
+    />
+  ) : (
+    <span className="avatar-fallback">
+      {u.full_name?.[0]?.toUpperCase() || "U"}
+    </span>
+  )}
+</div>
 
-  {/* NEW: Call Icons for Direct Messages */}
-  {"email" in selectedTarget && (
-    <div className="header-right">
-      <button className="call-icon-btn" title="Voice Call" onClick={() => startCall("voice")}>
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-          <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
-        </svg>
-      </button>
-      <button className="call-icon-btn" title="Video Call" onClick={() => startCall("video")}>
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-          <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
-        </svg>
-      </button>
+
+  {isOnline && <div className="online-dot" />}
+
+  {(u.unread_count ?? 0) > 0 && (
+    <div
+      className={`unread-badge ${
+        isSidebarCollapsed ? "collapsed-badge" : ""
+      }`}
+    >
+      {isSidebarCollapsed && (u.unread_count ?? 0) > 9
+        ? "9+"
+        : (u.unread_count ?? 0)}
     </div>
   )}
 </div>
+
+
+              {!isSidebarCollapsed && (
+                <>
+                  <div className="info">
+                    <span className="name">{u.full_name || u.email.split('@')[0]}</span>
+                    {isOnline ? <span className="active-now">Active now</span> : <span className="status">Offline</span>}
+                  </div>
+
+
+
+                    {view === "chats" && (
+                      <div className="sidebar-item-actions">
+                        <button className="sidebar-dots" onClick={(e) => {
+                          e.stopPropagation();
+                          setSidebarMenuOpenId(u.id === sidebarMenuOpenId ? null : u.id);
+                        }}>︙</button>
+                        {sidebarMenuOpenId === u.id && (
+                          <div className="sidebar-menu">
+                            <button onClick={(e) => { e.stopPropagation(); handleMarkAsRead(u.id); }}>
+                              Mark as Read
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); handleDeleteConversation(u.id); }} className="delete-btn">
+                              Delete Chat
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                   
+                </>
+              )}
+            </div>
+          );
+        })}
+        
+        {view === "discover" && suggestedGroups.map(g => (
+          <div key={g.id} className={`item ${selectedTarget?.id === g.id ? 'active' : ''}`} onClick={() => setSelectedTarget(g)}>
+            <div className="avatar grp">#</div>
+            {!isSidebarCollapsed && (
+              <div className="info"><span className="name">{g.name}</span></div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+    {/* ... rest of the chat window ... */}
+    {/* Chat Window Section */}
+    <div className="chat-window">
+      {selectedTarget ? (
+        <>
+          <div className="chat-header">
+            <div className="header-left">
+              <strong>
+                {"full_name" in selectedTarget 
+                  ? (selectedTarget.full_name || selectedTarget.email) 
+                  : (selectedTarget as Group).name}
+              </strong>
+              {"email" in selectedTarget && onlineUsers.includes(selectedTarget.id) && (
+                <span className="header-online">● Online</span>
+              )}
+
+              <div className="header-avatar">
+  {("avatar_url" in selectedTarget && selectedTarget.avatar_url) ? (
+    <img
+      src={selectedTarget.avatar_url}
+      alt={selectedTarget.full_name}
+      className="avatar-img"
+    />
+  ) : (
+    <div className="avatar-fallback">
+      {("full_name" in selectedTarget
+        ? selectedTarget.full_name?.[0]
+        : "#")}
+    </div>
+  )}
+</div>
+
+            </div>
+
+            {incomingCall && (
+              <div className="call-modal">
+                <div className="modal-content">
+                  <h3>Incoming {incomingCall.type} Call</h3>
+                  <p>{incomingCall.callerName} is calling you...</p>
+                  <div className="modal-actions">
+                    <button className="accept" onClick={handleAcceptCall}>Accept</button>
+                    <button className="decline" onClick={handleDeclineCall}>Decline</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {"email" in selectedTarget && (
+              <div className="header-right">
+                <button className="call-icon-btn" title="Voice Call" onClick={() => startCall("voice")}>
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+                    <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
+                  </svg>
+                </button>
+                <button className="call-icon-btn" title="Video Call" onClick={() => startCall("video")}>
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+                    <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
+                  </svg>
+                </button>
+              </div>
+            )}
+          </div>
+          {/* ... Rest of message-list and input-area code ... */}
 
             <div className="message-list">
               {messages.map(m => (
@@ -648,19 +803,20 @@ const loadMsgs = async () => {
                       </div>
                     )}
 
-                    {m.file_url && (
-                      <div className="media-content">
-                        {m.file_url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
-                          <img src={m.file_url} alt="Shared" className="chat-img" />
-                        ) : m.file_url.match(/\.(mp4|webm|ogg)$/i) ? (
-                          <video src={m.file_url} controls className="chat-video" />
-                        ) : m.file_url.match(/\.(mp3|wav|m4a)$/i) ? (
-                          <audio src={m.file_url} controls className="chat-audio" />
-                        ) : (
-                          <a href={m.file_url} target="_blank" rel="noreferrer" className="file-link">📎 Download File</a>
-                        )}
-                      </div>
-                    )}
+{m.file_url && (
+  <div className="media-content">
+    {m.file_url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+      <img src={m.file_url} alt="Shared" className="chat-img" />
+    ) : m.file_url.match(/\.(mp4|webm|ogg)$/i) ? (
+      <video src={m.file_url} controls className="chat-video" />
+    ) : m.file_url.match(/\.(mp3|wav|m4a)$/i) ? (
+      <audio src={m.file_url} controls className="chat-audio" />
+    ) : (
+      <a href={m.file_url} target="_blank" rel="noreferrer" className="file-link">📎 Download File</a>
+    )}
+  </div>
+)}
+
 
                     {editingId === m.id ? (
                       <form onSubmit={handleEdit} className="edit-form">
@@ -705,10 +861,148 @@ const loadMsgs = async () => {
         .sidebar { width: 350px; border-right: 1px solid #1e293b; display: flex; flex-direction: column; background: #020617; }
         .sidebar-header { background: #0f172a; border-bottom: 1px solid #1e293b; }
         .tabs { display: flex; }
+        .sidebar { 
+  width: 350px; 
+  border-right: 1px solid #1e293b; 
+  display: flex; 
+  flex-direction: column; 
+  background: #020617; 
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+
+.sidebar.collapsed { 
+  width: 80px; 
+}
+  .avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+  .header-avatar {
+  width: 40px;
+  height: 40px;
+  margin-right: 12px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #334155;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+
+.avatar-fallback {
+  font-weight: bold;
+  font-size: 16px;
+}
+
+
+.nav-container {
+  padding: 12px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.nav-home-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.2s;
+  justify-content: flex-start;
+}
+  .avatar-wrapper {
+  position: relative;
+}
+
+/* Expanded */
+.unread-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #ef4444;
+  color: white;
+  font-size: 11px;
+  font-weight: bold;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  z-index: 20;
+}
+
+/* Collapsed */
+.sidebar.collapsed .unread-badge.collapsed-badge {
+  top: -2px;
+  right: -2px;
+  min-width: 16px;
+  height: 16px;
+  font-size: 10px;
+  padding: 0;
+}
+
+
+.nav-home-btn:hover {
+  background: #334155;
+  color: white;
+}
+
+.nav-text {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+/* Adjusted for Collapsed state */
+.sidebar.collapsed .nav-home-btn {
+  justify-content: center;
+  padding: 10px 0;
+}
+
+.sidebar.collapsed .nav-container {
+  padding: 12px 8px;
+}
+
+.collapse-toggle {
+  /* ... previous styles ... */
+  top: 65px; /* Adjusting height so it doesn't overlap the home button */
+}
+
+.collapse-toggle {
+  position: absolute;
+  right: -12px;
+  top: 75px;
+  width: 24px;
+  height: 24px;
+  background: #3b82f6;
+  border: none;
+  border-radius: 50%;
+  color: white;
+  cursor: pointer;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.5);
+}
+
+.sidebar.collapsed .item {
+  justify-content: center;
+}
         .tabs button { flex: 1; padding: 18px; border: none; background: none; color: #64748b; cursor: pointer; font-weight: 600; }
         .tabs button.active { color: #3b82f6; border-bottom: 2px solid #3b82f6; }
-        .search-box { padding: 12px; }
-        .search-box input { width: 100%; padding: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 20px; color: white; outline: none; }
+        .section-label { padding: 10px 20px; font-size: 12px; color: #94a3b8; text-transform: uppercase; }
+        .search-box input { width: 90%; padding: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 20px; color: white; outline: none; }
         .sidebar-content { flex: 1; overflow-y: auto; padding: 8px; }
         .item { display: flex; align-items: center; gap: 14px; padding: 12px; border-radius: 12px; cursor: pointer; position: relative; transition: background 0.2s; }
         .item:hover { background: #1e293b; }
@@ -847,4 +1141,5 @@ const loadMsgs = async () => {
       `}</style>
     </div>
   );
+
 }
