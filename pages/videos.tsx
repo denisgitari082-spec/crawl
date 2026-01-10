@@ -1776,14 +1776,27 @@ textarea {
 
 
 
-        .container { 
-          max-width: 550px; 
-          margin: 0 auto; 
-          padding: 20px; 
-          color: white; 
-          min-height: 100vh;
-          background-color: #000000;
-        }
+.container {
+  width: 100vw;
+  min-height: 100vh;
+  margin: 0;
+  padding: 5px; /* optional, small breathing room */
+  background-color: #000;
+  box-sizing: border-box;
+}
+.video-feed {
+  max-width: 550px;
+  margin: 0 auto;
+}
+html, body, #__next {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: #000;
+  overflow-x: hidden;
+}
+
         
         /* HEADER */
         .header-nav { 
