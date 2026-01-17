@@ -62,6 +62,18 @@ const messageListRef = useRef<HTMLDivElement>(null); // To track the scrollable 
 // Inside MessagesPage component
 const [incomingCall, setIncomingCall] = useState<any>(null);
 
+
+const FileIcon = () => (
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+      </svg>
+);
+const AttachmentIcon = () => (
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+      </svg>
+);
+
 useEffect(() => {
   if (!router.isReady) return;
   if (!user || typeof user !== "string") return;
@@ -302,103 +314,167 @@ useEffect(() => {
 // 2. FETCH INBOX (Optimized via RPC)
 const fetchChatHistory = async (userId: string) => {
   try {
-    // Call the SQL function we created in the Supabase Editor
     const { data, error } = await supabase.rpc('get_my_chats', { user_id: userId });
-
     if (error) throw error;
 
     if (data) {
-      // Map the data to match your ChatUser type and handle local active state
-      const enrichedChats: ChatUser[] = data.map((chat: any) => {
-        const isCurrentlyOpen = selectedTargetRef.current?.id === chat.id;
+const enrichedChats: ChatUser[] = data.map((chat: any) => {
+  // Check if this chat is the one currently open
+  const isCurrentlyOpen = selectedTargetRef.current?.id === chat.id;
 
-        return {
-          id: chat.id,
-          full_name: chat.full_name,
-          email: chat.email,
-           avatar_url: chat.avatar_url,
-          // If the chat is currently open, show 0 unread to the user immediately
-          unread_count: isCurrentlyOpen ? 0 : Number(chat.unread_count),
-          last_message_at: chat.last_message_at
-        };
-      });
+  return {
+    id: chat.id,
+    full_name: chat.full_name,
+    email: chat.email,
+    avatar_url: chat.avatar_url,
+    // FIX: Ensure we compare the ID correctly and force 0 if open
+    unread_count: isCurrentlyOpen ? 0 : Number(chat.unread_count), 
+    last_message_at: chat.last_message_at
+  };
+});
 
-      // We don't need to sort here because the SQL function 
-      // already handles "order by unread_count desc, last_message_at desc"
       setChats(enrichedChats);
     }
   } catch (err) {
     console.error("Error fetching chat history:", err);
   }
 };
-  // 3. GLOBAL INBOX LISTENER
-  useEffect(() => {
-    if (!currentUser) return;
 
-    const globalChannel = supabase.channel('global-inbox-updates')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, async (payload) => {
-        const newMsg = payload.new as Message;
-        if (newMsg.sender_id === currentUser.id) return;
+useEffect(() => {
+  if (!selectedTarget || !currentUser) return;
 
-        if (newMsg.receiver_id === currentUser.id) {
-          const isActive = selectedTargetRef.current && newMsg.sender_id === selectedTargetRef.current.id;
-          if (isActive) {
-            supabase.from("messages").update({ is_read: true }).eq("id", newMsg.id);
-            fetchChatHistory(currentUser.id);
-          } else {
-            fetchChatHistory(currentUser.id);
-          }
+  const markAsRead = async () => {
+    // 1. Clear it in UI immediately
+    setChats(prev => prev.map(c => 
+      c.id === selectedTarget.id ? { ...c, unread_count: 0 } : c
+    ));
+
+    // 2. Update Database
+    const { error } = await supabase
+      .from("messages")
+      .update({ is_read: true })
+      .match({
+        sender_id: selectedTarget.id,
+        receiver_id: currentUser.id,
+        is_read: false
+      });
+
+    // 3. Wait a tiny bit for the DB to settle, then refresh sidebar
+    if (!error) {
+      setTimeout(() => fetchChatHistory(currentUser.id), 500);
+    }
+  };
+
+  markAsRead();
+}, [selectedTarget?.id]); // Only runs when you switch chats
+
+// GLOBAL INBOX LISTENER
+useEffect(() => {
+  if (!currentUser) return;
+
+  const globalChannel = supabase.channel('global-inbox-updates')
+    // 1. LISTEN FOR READ RECEIPTS (UPDATE)
+    // This turns ticks blue for the sender when the receiver opens the chat
+    .on('postgres_changes', { 
+      event: 'UPDATE', 
+      schema: 'public', 
+      table: 'messages' 
+    }, (payload) => {
+      const updatedMsg = payload.new as Message;
+      
+      // Update the message list if this message is currently being viewed
+      setMessages(prev => prev.map(m => 
+        m.id === updatedMsg.id ? { ...m, is_read: updatedMsg.is_read } : m
+      ));
+    })
+
+    // 2. LISTEN FOR NEW MESSAGES (INSERT)
+    .on('postgres_changes', { 
+      event: 'INSERT', 
+      schema: 'public', 
+      table: 'messages' 
+    }, async (payload) => {
+      const newMsg = payload.new as Message;
+
+      // Ignore messages I sent
+      if (newMsg.sender_id === currentUser.id) return;
+
+      // Check if message is for me
+      if (newMsg.receiver_id === currentUser.id) {
+        const isActive = selectedTargetRef.current && newMsg.sender_id === selectedTargetRef.current.id;
+        
+        if (isActive) {
+          // VIRUS FIX: If chat is open, mark as read IMMEDIATELY in DB
+          await supabase
+            .from("messages")
+            .update({ is_read: true })
+            .eq("id", newMsg.id);
+            
+          // Local update so the receiver sees the new message as already read
+          setMessages(prev => {
+            if (prev.some(m => m.id === newMsg.id)) return prev;
+            return [...prev, { ...newMsg, is_read: true }];
+          });
         }
-      })
-      .subscribe();
+        
+        // Refresh sidebar history (badges/last message)
+        fetchChatHistory(currentUser.id);
+      }
+    })
+    .subscribe();
 
-    return () => { supabase.removeChannel(globalChannel); };
-  }, [currentUser]);
+  return () => { 
+    supabase.removeChannel(globalChannel); 
+  };
+}, [currentUser]);
+useEffect(() => {
+  const handleFocus = () => {
+    if (currentUser) fetchChatHistory(currentUser.id);
+  };
+  window.addEventListener("focus", handleFocus);
+  return () => window.removeEventListener("focus", handleFocus);
+}, [currentUser]);
 
   // 4. CHAT WINDOW LISTENER
   useEffect(() => {
     if (!selectedTarget || !currentUser) return;
 
 const loadMsgs = async () => {
-    if (!selectedTarget || !currentUser) return;
+  if (!selectedTarget || !currentUser) return;
 
-    // 1. Instant UI Feedback: Clear the badge locally so it feels fast
-    setChats(prev => prev.map(chat =>
-      chat.id === selectedTarget.id ? { ...chat, unread_count: 0 } : chat
-    ));
+  // 1. Instant UI Feedback: Force the badge to 0 for this user in local state
+  setChats(prev => prev.map(chat =>
+    chat.id === selectedTarget.id ? { ...chat, unread_count: 0 } : chat
+  ));
 
-    try {
-      let query = supabase.from("messages").select("*").order("created_at", { ascending: true });
+  try {
+    let query = supabase.from("messages").select("*").order("created_at", { ascending: true });
 
-      if ("email" in selectedTarget) {
-        // 2. IMPORTANT: Await the update so the DB is actually updated 
-        // before we try to fetch the new history counts.
-        await supabase
-          .from("messages")
-          .update({ is_read: true })
-          .match({
-            sender_id: selectedTarget.id,
-            receiver_id: currentUser.id,
-            is_read: false
-          });
+    if ("email" in selectedTarget) {
+      // 2. Mark as read in DB
+      const { error: updateError } = await supabase
+        .from("messages")
+        .update({ is_read: true })
+        .eq("sender_id", selectedTarget.id)
+        .eq("receiver_id", currentUser.id)
+        .eq("is_read", false);
 
-        // 3. Update the sidebar history NOW that the DB is confirmed read
-        fetchChatHistory(currentUser.id);
-
-        query = query.or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${selectedTarget.id}),and(sender_id.eq.${selectedTarget.id},receiver_id.eq.${currentUser.id})`);
-      } else {
-        query = query.eq("group_id", selectedTarget.id);
+      if (!updateError) {
+        // 3. IMPORTANT: Refresh sidebar counts only AFTER the update is done
+        await fetchChatHistory(currentUser.id);
       }
 
-      // 4. Load the messages for the chat window
-      const { data, error } = await query;
-      if (!error) {
-        setMessages(data || []);
-      }
-    } catch (err) {
-      console.error("Error loading messages:", err);
+      query = query.or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${selectedTarget.id}),and(sender_id.eq.${selectedTarget.id},receiver_id.eq.${currentUser.id})`);
+    } else {
+      query = query.eq("group_id", selectedTarget.id);
     }
-  };
+
+    const { data, error } = await query;
+    if (!error) setMessages(data || []);
+  } catch (err) {
+    console.error("Error loading messages:", err);
+  }
+};
     
     loadMsgs();
 
@@ -725,6 +801,7 @@ return (
     {/* Chat Window Section */}
     <div className="chat-window">
 
+<div className={`chat-window ${!isSidebarCollapsed ? "sidebar-open-blur" : ""}`}>
 
 {/* App Bar (Mobile Safe) */}
 <div className="app-bar">
@@ -769,7 +846,7 @@ return (
     <div className="avatar-fallback">
       {("full_name" in selectedTarget
         ? selectedTarget.full_name?.[0]
-        : "#")}
+        : "group")}
     </div>
   )}
 </div>
@@ -837,7 +914,12 @@ return (
     ) : m.file_url.match(/\.(mp3|wav|m4a)$/i) ? (
       <audio src={m.file_url} controls className="chat-audio" />
     ) : (
-      <a href={m.file_url} target="_blank" rel="noreferrer" className="file-link">📎 Download File</a>
+      <a href={m.file_url} target="_blank" rel="noreferrer" className="file-link">
+  <div className="file-link-content">
+    <FileIcon />
+    <span>Download File</span>
+  </div>
+</a>
     )}
   </div>
 )}
@@ -857,10 +939,16 @@ return (
 </div>
                     )}
 
-                    <div className="msg-footer">
-                      {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      {m.sender_id === currentUser.id && <span className="read-status">{m.is_read ? " ✓✓" : " ✓"}</span>}
-                    </div>
+<div className="msg-footer">
+  {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+  
+  {/* Show ticks only for messages I SENT */}
+  {m.sender_id === currentUser.id && (
+    <span className={`read-status ${m.is_read ? "status-blue" : "status-grey"}`}>
+      {m.is_read ? " ✓✓" : " ✓"}
+    </span>
+  )}
+</div>
                   </div>
                 </div>
               ))}
@@ -868,10 +956,20 @@ return (
             </div>
 
             <form className="input-area" onSubmit={sendMessage}>
-              <label className="attach-btn">
-                <input type="file" onChange={handleFileUpload} hidden disabled={uploading} />
-                {uploading ? "..." : "📎"}
-              </label>
+<label className={`attach-btn ${uploading ? 'uploading' : ''}`}>
+  <input 
+    type="file" 
+    onChange={handleFileUpload} 
+    hidden 
+    disabled={uploading} 
+  />
+  
+  {uploading ? (
+    <div className="spinner-small" /> /* Replacing "..." with a spinner looks better */
+  ) : (
+    <AttachmentIcon />
+  )}
+</label>
               <input value={newMessage} onChange={(e) => setNewMessage(e.target.value)} placeholder="Type a message..." autoFocus />
               <button type="submit">Send</button>
             </form>
@@ -880,8 +978,92 @@ return (
           <div className="empty"><h2>Select a chat</h2></div>
         )}
       </div>
+      </div>
 
       <style jsx>{`
+      .read-status {
+  font-size: 0.85rem;
+  margin-left: 5px;
+  font-weight: bold;
+  transition: color 0.3s ease;
+}
+
+/* Grey tick for "Sent but not read" */
+.status-grey {
+  color: #94a3b8; 
+}
+
+/* Blue ticks for "Read" */
+.status-blue {
+  color: #34b7f1; /* Classic WhatsApp Blue */
+}
+
+.msg-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+      .attach-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: #060606;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 50%;
+}
+
+.attach-btn:hover {
+  background: #f1f5f9;
+  color: #030303; /* Your theme color */
+}
+
+.attach-btn.uploading {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Simple CSS Spinner for the "..." state */
+.spinner-small {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #cbd5e1;
+  border-top-color: #2402ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+      /* This class targets the chat window when sidebar is open */
+.sidebar-open-blur {
+  filter: blur(5px);           /* The actual blur */
+  opacity: 0.6;                /* Slight fade for better focus */
+  pointer-events: none;        /* Disables clicking on chat when blurred */
+  transition: filter 0.3s ease, opacity 0.3s ease;
+  user-select: none;           /* Prevents text selection */
+}
+
+/* Base style for chat-window to ensure smooth transition */
+.chat-window {
+  transition: filter 0.3s ease, opacity 0.3s ease;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  position: relative;
+}
+
+/* Mobile specific: if sidebar covers screen, you might want more blur */
+@media (max-width: 768px) {
+  .sidebar-open-blur {
+    filter: blur(8px);
+  }
+}
 
       @media (max-width: 768px) {
   .messenger-container {
@@ -941,6 +1123,7 @@ html, body {
   position: sticky;
   top: env(safe-area-inset-top);
   z-index: 1000;
+  color: black;
 
   height: 56px;
   padding-top: env(safe-area-inset-top);
@@ -951,13 +1134,13 @@ html, body {
   align-items: center;
   gap: 12px;
 
-  background: #020617;
-  border-bottom: 1px solid #1e293b;
+  background: white;
+  border-bottom: 1px solid #060606;
 }
 
 .appbar-back {
-  background: none;
-  border: none;
+  background: white;
+  border: 1px solid #060606;
   color: white;
   font-size: 22px;
   cursor: pointer;
@@ -971,16 +1154,16 @@ html, body {
   text-overflow: ellipsis;
 }
 
-        .messenger-container { display: flex; height: 100vh; background: #0f172a; color: white; }
-        .sidebar { width: 350px; border-right: 1px solid #1e293b; display: flex; flex-direction: column; background: #020617; }
-        .sidebar-header { background: #0f172a; border-bottom: 1px solid #1e293b; }
+        .messenger-container { display: flex; height: 100vh; background: white; color: black; }
+        .sidebar { width: 350px; border-right: 1px solid #020202; display: flex; flex-direction: column; background: white; }
+        .sidebar-header { background: white; border-bottom: 1px solid #070707; }
         .tabs { display: flex; }
         .sidebar { 
   width: 350px; 
-  border-right: 1px solid #1e293b; 
+  border-right: 1px solid #050505; 
   display: flex; 
   flex-direction: column; 
-  background: #020617; 
+  background: white; 
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
 }
@@ -991,6 +1174,7 @@ html, body {
   .avatar-img {
   width: 100%;
   height: 100%;
+  border: 2px solid #0303f7;
   object-fit: cover;
   border-radius: 50%;
 }
@@ -1010,6 +1194,7 @@ html, body {
 .avatar-fallback {
   font-weight: bold;
   font-size: 16px;
+  
 }
 
 
@@ -1033,10 +1218,10 @@ html, body {
   gap: 12px;
   width: 100%;
   padding: 10px;
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: white;
+  border: 1px solid #0a0a0a;
   border-radius: 8px;
-  color: #94a3b8;
+  color: black;
   cursor: pointer;
   transition: all 0.2s;
   justify-content: flex-start;
@@ -1076,8 +1261,8 @@ html, body {
 
 
 .nav-home-btn:hover {
-  background: #334155;
-  color: white;
+  background: #fcfdfe;
+  color: black;
 }
 
 .nav-text {
@@ -1104,51 +1289,51 @@ html, body {
   position: absolute;
   right: -12px;
   top: 75px;
-  width: 24px;
-  height: 24px;
-  background: #3b82f6;
-  border: none;
+  width: 30px;
+  height: 30px;
+  background: white;
+  border: 1px solid black;
   border-radius: 50%;
-  color: white;
+  color: black;
   cursor: pointer;
   z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 15px;
   box-shadow: 0 0 10px rgba(0,0,0,0.5);
 }
 
 .sidebar.collapsed .item {
   justify-content: center;
 }
-        .tabs button { flex: 1; padding: 18px; border: none; background: none; color: #64748b; cursor: pointer; font-weight: 600; }
-        .tabs button.active { color: #3b82f6; border-bottom: 2px solid #3b82f6; }
-        .section-label { padding: 10px 20px; font-size: 12px; color: #94a3b8; text-transform: uppercase; }
-        .search-box input { width: 90%; padding: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 20px; color: white; outline: none; }
+        .tabs button { flex: 1; padding: 18px; border: none; background: none; color: #060606; cursor: pointer; font-weight: 600; }
+        .tabs button.active { color: #090909; border-bottom: 2px solid #070707; }
+        .section-label { padding: 10px 20px; font-size: 12px; color: #0a0a0a; text-transform: uppercase; }
+        .search-box input { width: 90%; padding: 10px; background: #fafbfd; border: 1px solid #050505; border-radius: 20px; color: black; outline: none; }
         .sidebar-content { flex: 1; overflow-y: auto; padding: 8px; }
         .item { display: flex; align-items: center; gap: 14px; padding: 12px; border-radius: 12px; cursor: pointer; position: relative; transition: background 0.2s; }
         .item:hover { background: #1e293b; }
         .item.active { background: #2563eb; }
         .avatar-wrapper { position: relative; width: 48px; height: 48px; flex-shrink: 0; }
         .avatar { width: 100%; height: 100%; background: #334155; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; }
-        .avatar.grp { background: #10b981; }
+        .avatar.grp { background: #10b981; bordr-radius: 12px; }
         .online-dot { position: absolute; bottom: 2px; right: 2px; width: 13px; height: 13px; background: #22c55e; border-radius: 50%; border: 2px solid #020617; z-index: 10; }
         .info { display: flex; flex-direction: column; justify-content: center; flex: 1; }
         .name { font-weight: 500; font-size: 15px; }
         .active-now { font-size: 12px; color: #22c55e; font-weight: bold; }
-        .status { font-size: 12px; color: #64748b; }
+        .status { font-size: 12px; color: #10f804; }
         .sidebar-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-left: auto; position: relative; min-width: 30px; }
         .unread-badge { background: #ef4444; color: white; font-size: 11px; font-weight: bold; min-width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0 5px; }
         .sidebar-item-actions { opacity: 0; transition: opacity 0.2s ease-in-out; }
         .item:hover .sidebar-item-actions { opacity: 1; }
-        .sidebar-dots { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 20px; padding: 4px; border-radius: 6px; }
-        .sidebar-menu { position: absolute; right: 0; top: 100%; margin-top: 5px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; z-index: 1000; min-width: 140px; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }
+        .sidebar-dots { background: none; border: none; color: #fd0501; cursor: pointer; font-size: 20px; padding: 4px; border-radius: 6px; }
+        .sidebar-menu { position: absolute;  right: 0; top: 100%; margin-top: 5px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; z-index: 1000; min-width: 140px; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }
         .sidebar-menu button { width: 100%; padding: 12px 16px; background: none; border: none; color: #f1f5f9; text-align: left; cursor: pointer; font-size: 13px; }
         .sidebar-menu button:hover { background: #334155; }
         .sidebar-menu .delete-btn { color: #f87171 !important; }
         .chat-window { flex: 1; display: flex; flex-direction: column; background: #0b141a; }
-        .chat-header { padding: 14px 25px; background: #1e293b; display: flex; align-items: center; }
+        .chat-header { padding: 14px 25px; background: #f9fafa; display: flex; align-items: center; }
         .header-online { font-size: 12px; color: #22c55e; margin-left: 10px; font-weight: bold; }
         .message-list { flex: 1; padding: 20px 40px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); background-opacity: 0.05; }
         .msg-wrapper { display: flex; width: 100%; }
@@ -1157,10 +1342,10 @@ html, body {
         .msg-bubble { max-width: 75%; min-width: 120px; padding: 8px 12px; border-radius: 12px; font-size: 14px; position: relative; }
         .sent { background: #005c4b; color: white; border-top-right-radius: 0; }
         .received { background: #202c33; color: white; border-top-left-radius: 0; }
-        .input-area { padding: 10px 20px; display: flex; gap: 12px; background: #202c33; align-items: center; }
-        .input-area input { flex: 1; padding: 12px; background: #2a3942; border: none; color: white; border-radius: 8px; outline: none; }
-        .input-area button { background: #3b82f6; border: none; color: white; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; }
-        .empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #64748b; }
+        .input-area { padding: 10px 20px; display: flex; gap: 12px; background: white; align-items: center; border: 1px solid #070707; }
+        .input-area input { flex: 1; padding: 12px; background: white; border: 1px solid black; color: black; border-radius: 8px; outline: none; }
+        .input-area button { background: white; border: 1px solid black; color: black; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #070707; background: #f9fafa; }
         .media-content { margin-bottom: 8px; border-radius: 8px; overflow: hidden; display: flex; justify-content: center; }
         .chat-img { max-width: 300px; max-height: 400px; width: auto; height: auto; object-fit: contain; border-radius: 8px; display: block; }
         .chat-video { max-width: 300px; border-radius: 8px; }
@@ -1170,7 +1355,7 @@ html, body {
         .dots-v { background: none; border: none; color: #fff; cursor: pointer; font-size: 16px; padding: 0 4px; }
         .msg-menu { position: absolute; right: 0; top: 20px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; z-index: 100; min-width: 80px; }
         .msg-menu button { display: block; width: 100%; padding: 8px; background: none; border: none; color: white; text-align: left; cursor: pointer; font-size: 12px; }
-        .msg-menu button:hover { background: #334155; }
+        .msg-menu button:hover { background: white; }
         .edit-form input { width: 100%; padding: 4px; background: #020617; border: 1px solid #3b82f6; color: white; border-radius: 4px; margin-bottom: 4px; outline: none; }
         .edit-buttons { display: flex; gap: 4px; }
         .edit-buttons button { font-size: 10px; padding: 2px 6px; border-radius: 4px; cursor: pointer; border: none; }
@@ -1211,8 +1396,9 @@ html, body {
 }
   .chat-header {
   padding: 14px 25px;
-  background: #1e293b;
-  display: flex;
+  background: white;
+  display: flex; 
+  border: 1px solid #070707;
   align-items: center;
   justify-content: space-between; /* Ensures left stays left, right stays right */
 }
@@ -1225,8 +1411,8 @@ html, body {
 
 .call-icon-btn {
   background: none;
-  border: none;
-  color: #94a3b8; /* Muted gray */
+  border: 1px solid #0a0a0a;
+  color: black; /* Muted gray */
   cursor: pointer;
   padding: 8px;
   border-radius: 50%;

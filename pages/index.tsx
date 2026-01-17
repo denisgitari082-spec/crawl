@@ -12,7 +12,8 @@ import { supabase } from "../src/lib/supabaseClient";
 
 // --- Types ---
 
-type Service = { id: string; title: string; description: string; category: string; contact: string; location: string; owner_id: string | null; profiles: { id: string; full_name: string; avatar_url: string | null; } | null; liked_by_me: boolean; like_count: number; };
+type Service = { id: string; title: string; description: string; category: string; contact: string; location: string; owner_id: string | null; profiles: { id: string; full_name: string; avatar_url: string | null; } | null; liked_by_me: boolean; like_count: number; media_urls: string | null;
+};
 
 type GroupPost = {
   id: string; content: string; image_url: string; location_name: string;
@@ -56,7 +57,34 @@ const [comments, setComments] = useState<Comment[]>([]);
 const [newComment, setNewComment] = useState("");
 const [expandedDescriptions, setExpandedDescriptions] = useState<Record<string, boolean>>({});
 
+const MarketplaceIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    <polyline points="9 22 9 12 15 12 15 22" />
+  </svg>
+);
 
+const ReelsIcon = () => (
+  <svg 
+    width="24" 
+    height="24" 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="2" 
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+  >
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+    <path d="M7 3v18" />
+    <path d="M3 7.5h4" />
+    <path d="M3 12h18" />
+    <path d="M3 16.5h4" />
+    <path d="M17 3v18" />
+    <path d="M17 7.5h4" />
+    <path d="M17 16.5h4" />
+  </svg>
+);
 
   useEffect(() => {
     const init = async () => {
@@ -271,6 +299,7 @@ const fetchData = async () => {
         .select(`
           id,
           title,
+          media_urls,
           description,
           category,
           contact,
@@ -298,6 +327,7 @@ console.log(navigator.userAgent);
           description: service.description,
           category: service.category,
           contact: service.contact,
+          media_urls: service.media_urls || [],
           location: service.location,
           owner_id: service.owner_id,
           profiles: Array.isArray(service.profiles) ? service.profiles[0] || null : service.profiles,
@@ -425,16 +455,37 @@ return (
       <h1 className="logo">ProConnect</h1>
       
       <div className="view-toggle">
-        <button className={view === "marketplace" ? "active" : ""} onClick={() => setView("marketplace")}>Marketplace</button>
-        <button 
-    onClick={() => router.push("/videos")}
-  >
-    Reels|Memes
-  </button>
+       <button 
+  className={`nav-btn ${view === "marketplace" ? "active" : ""}`} 
+  onClick={() => setView("marketplace")}
+  title="Marketplace"
+>
+  <MarketplaceIcon />
+  <span className="nav-label"></span>
+</button>
+<button 
+  className="nav-btn" 
+  onClick={() => router.push("/videos")}
+>
+  <ReelsIcon />
+  <span className="nav-label"></span>
+</button>
 
       </div>
 
+
+
+
       <div className="header-actions">
+<Link href="/anonymous" className="header-btn" title="Confessions">       
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 2C7.03 2 3 6.03 3 11V14.5C3 15.33 3.67 16 4.5 16H5V11C5 7.13 8.13 4 12 4C15.87 4 19 7.13 19 11V16H19.5C20.33 16 21 15.33 21 14.5V11C21 6.03 16.97 2 12 2Z" fill="currentColor"/>
+  <path d="M9 14C9 15.6569 7.65685 17 6 17C4.34315 17 3 15.6569 3 14V11H9V14Z" fill="currentColor"/>
+  <path d="M15 14C15 15.6569 16.3431 17 18 17C19.6569 17 21 15.6569 21 14V11H15V14Z" fill="currentColor"/>
+  <path d="M12 13C10.9 13 10 13.9 10 15V18C10 19.1 10.9 20 12 20C13.1 20 14 19.1 14 18V15C14 13.9 13.1 13 12 13Z" fill="currentColor"/>
+</svg>
+        </Link>
+
         <Link href="/group" className="header-btn" title="Groups">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
@@ -526,11 +577,59 @@ return (
             <p className={`card-desc ${expandedDescriptions[service.id] ? "expanded" : "clamped"}`}>
               {service.description}
             </p>
-            {service.description.length > 120 && (
-              <button className="see-more-btn" onClick={() => toggleDescription(service.id)}>
-                {expandedDescriptions[service.id] ? "See less" : "See more"}
-              </button>
-            )}
+<div className="service-content">
+  {/* Existing Description Logic */}
+
+  {service.description.length > 120 && (
+    <button className="see-more-btn" onClick={() => toggleDescription(service.id)}>
+      {expandedDescriptions[service.id] ? "See less" : "See more"}
+    </button>
+  )}
+
+{/* NEW: Safe Media Display Grid */}
+{service.media_urls && (
+  <div className={`media-display-grid ${
+    Array.isArray(service.media_urls) && service.media_urls.length > 1 ? 'multiple' : 'single'
+  }`}>
+    {(Array.isArray(service.media_urls) ? service.media_urls : [service.media_urls]).map((url: string, index: number) => {
+      
+      // 1. CLEAN THE URL: This removes [" and "] and extra quotes that cause the 404 localhost error
+      const cleanUrl = typeof url === 'string' 
+        ? url.replace(/[\[\]"]/g, '').trim() 
+        : url;
+
+      // 2. CORRECT DETECTION: Don't put jpg/png in the video check!
+      const isVideo = cleanUrl.toLowerCase().match(/\.(mp4|webm|ogg|mov)$/i);
+      
+      // Skip rendering if the URL is empty after cleaning
+      if (!cleanUrl) return null;
+
+      return (
+        <div key={index} className="media-container">
+          {isVideo ? (
+            <video 
+              src={cleanUrl} 
+              controls 
+              className="feed-media"
+              preload="metadata"
+            />
+          ) : (
+            <img 
+              src={cleanUrl} 
+              alt="service" 
+              className="feed-media" 
+              loading="lazy"
+              // Error fallback: hides broken images if URL is still bad
+              onError={(e) => (e.currentTarget.style.display = 'none')}
+              onClick={() => window.open(cleanUrl, '_blank')} 
+            />
+          )}
+        </div>
+      );
+    })}
+  </div>
+)}
+</div>
             {service.location && (
               <div className="service-location">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s-6-5.33-6-10a6 6 0 0 1 12 0c0 4.67-6 10-6 10z" /><circle cx="12" cy="11" r="2" /></svg>
@@ -644,6 +743,48 @@ return (
 
 
       <style jsx>{`
+      .media-display-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* If only one image/video, make it large */
+.media-display-grid.single {
+  grid-template-columns: 1fr;
+}
+
+/* If multiple, make a 2-column grid */
+.media-display-grid.multiple {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.media-container {
+  width: 100%;
+  aspect-ratio: 1 / 1; /* Keeps everything square and tidy */
+  background: #f1f5f9;
+}
+
+.feed-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* Prevents stretching */
+  cursor: pointer;
+  display: block;
+}
+
+.see-more-btn {
+  background: none;
+  border: none;
+  color: #2402ff;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
 
       *,
 *::before,
@@ -1094,7 +1235,7 @@ body {
   background: white;
   min-height: 100vh;
   color: black;
- 
+ border: 1px solid black;
   width: 100%;
   flex-wrap: wrap;
 
@@ -1126,7 +1267,7 @@ padding-right: 5px;
   gap: 10px;
   flex-wrap: wrap;
 
-  border-bottom: 1px solid rgb(4, 5, 5);
+  border: 1px solid rgb(4, 5, 5);
 }
 
         .logo { font-size: 1.4rem; font-weight: 800; background: linear-gradient(90deg, #3b82f6, #6366f1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }

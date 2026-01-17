@@ -159,43 +159,42 @@ useEffect(() => {
       .channel(`group-${id}`)
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT', // Listen specifically for new messages
-          schema: 'public',
-          table: 'group_posts',
-          filter: `group_id=eq.${id}`,
-        },
+        { event: '*', schema: 'public', table: 'group_posts', filter: `group_id=eq.${id}` },
         async (payload) => {
-          // Instead of fetching everything, fetch the full profile for JUST the new message
-          const { data: newPost } = await supabase
+          
+          // 1. HANDLE DELETE
+          if (payload.eventType === 'DELETE') {
+            setPosts((prev) => prev.filter(p => p.id !== payload.old.id));
+            return;
+          }
+
+          // 2. HANDLE INSERT OR UPDATE
+          // Fetch the full profile to avoid "Unknown User"
+          const { data: enrichedPost } = await supabase
             .from("group_posts")
             .select(`*, profiles (full_name)`)
             .eq("id", payload.new.id)
             .single();
 
-          if (newPost) {
-            setPosts((prev) => [newPost, ...prev]); // Add to the top of the list
+          if (enrichedPost) {
+            setPosts((prev) => {
+              // --- DUPLICATE PREVENTION ---
+              const exists = prev.some(p => p.id === enrichedPost.id);
+              
+              if (payload.eventType === 'INSERT') {
+                if (exists) return prev; // If already there, don't add again!
+                return [enrichedPost, ...prev];
+              }
+
+              if (payload.eventType === 'UPDATE') {
+                return prev.map(p => p.id === enrichedPost.id ? enrichedPost : p);
+              }
+
+              return prev;
+            });
           }
         }
       )
-.on(
-  'postgres_changes',
-  { event: '*', schema: 'public', table: 'group_posts', filter: `group_id=eq.${id}` },
-  async (payload) => {
-    if (payload.eventType === 'INSERT') {
-      const { data: newPost } = await supabase
-        .from("group_posts")
-        .select(`*, profiles (full_name)`)
-        .eq("id", payload.new.id)
-        .single();
-      if (newPost) setPosts((prev) => [newPost, ...prev]);
-    } else if (payload.eventType === 'DELETE') {
-      setPosts((prev) => prev.filter(p => p.id !== payload.old.id));
-    } else if (payload.eventType === 'UPDATE') {
-      setPosts((prev) => prev.map(p => p.id === payload.new.id ? { ...p, ...payload.new } : p));
-    }
-  }
-)
       .subscribe();
 
     return () => {
@@ -203,15 +202,6 @@ useEffect(() => {
     };
   }
 }, [id, router.isReady]);
-
-  // UI UPGRADE: Auto-expand textarea height based on content
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "42px";
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-    }
-  }, [content]);
-
   const init = async () => {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -353,7 +343,14 @@ const handleSendMessage = async (e: React.FormEvent) => {
     fetchMembers();
   };
 
-  if (loading) return <div className="state-screen">Loading Chat...</div>;
+  if (loading) return (
+  <div className="state-screen">
+    <div className="loader-container">
+      <div className="spiner"></div>
+      <p>Loading Chat...</p>
+    </div>
+  </div>
+);
   if (!isMember) {
   return (
     <div className="state-screen">
@@ -401,33 +398,7 @@ const handleSendMessage = async (e: React.FormEvent) => {
 )}
 
       <main className="chat-area">
-{/* Mobile App Bar */}
-<div className="mobile-app-bar">
-  <button
-    className="appbar-btn"
-    onClick={() => router.push("/group")}
-    aria-label="Back"
-  >
-    ←
-  </button>
 
-  <div className="appbar-center">
-    <h1 className="appbar-title">
-      {group?.name || "Group"}
-    </h1>
-    <span className="appbar-sub">
-      {members.length} members
-    </span>
-  </div>
-
-  <button
-    className="appbar-btn"
-    onClick={() => setShowMembers(true)}
-    aria-label="Members"
-  >
-    👥
-  </button>
-</div>
 
 
 <header className="chat-header">
@@ -603,11 +574,19 @@ const handleSendMessage = async (e: React.FormEvent) => {
           </div>
         )}
 
-        <div className="post-info">
-          <span className="time-stamp">
-            {new Date(post.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </span>
-        </div>
+<div className="post-info">
+  {/* Display the Sender's Name */}
+  <span className="sender-name">
+    {post.profiles?.full_name || "User"}
+  </span>
+
+  <span className="time-stamp">
+    {new Date(post.created_at).toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    })}
+  </span>
+</div>
       </div>
     </div>
   ))}
@@ -706,22 +685,63 @@ const handleSendMessage = async (e: React.FormEvent) => {
       </main>
 
       <style jsx>{`
+      .state-screen {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  background-color: #f8fafc;
+  color: #64748b;
+  font-family: sans-serif;
+}
+
+.loader-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* The Spinner */
+.spiner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e2e8f0; /* Light grey background */
+  border-top: 4px solid #2563eb; /* Blue primary color */
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* The Animation Logic */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.sender-name {
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: var(--primary-color, #f8f9f9);
+  margin-right: 8px;
+  display: inline-block;
+  min-width: 50px; /* Prevents bubble layout shift */
+}
+
+.post-info {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  border-top: 1px solid rgba(0,0,0,0.05);
+  padding-top: 2px;
+}
+      .textareaRef{background: white}
       @media (max-width: 768px) {
 
-  /* Show mobile app bar */
-  .mobile-app-bar {
-    display: flex;
-  }
 
-  /* Hide desktop header */
-  .chat-header {
-    display: none;
-  }
+
+
 
   /* Push content BELOW app bar */
-  .chat-area {
-    padding-top: calc(56px + env(safe-area-inset-top));
-  }
+
 
   /* Feed padding reduced to avoid overflow */
   .feed {
@@ -760,14 +780,15 @@ html, body {
 .mobile-app-bar {
   display: none;
   position: sticky;
-  top: 0;
+  margin-top: 0px;
   z-index: 50;
 
   height: calc(56px + env(safe-area-inset-top));
   padding: env(safe-area-inset-top) 12px 0;
 
-  background: #1e293b;
-  border-bottom: 1px solid #334155;
+  background: white;
+  color: black;
+  border-bottom: 1px solid #121213;
 
   align-items: center;
   justify-content: space-between;
@@ -778,8 +799,9 @@ html, body {
   height: 36px;
   border-radius: 10px;
   border: none;
-  background: #334155;
-  color: white;
+  background: #fcfdff;
+  color: black;
+  border: 1px solid #0a0a0a;
   font-size: 18px;
   cursor: pointer;
 }
@@ -795,6 +817,7 @@ html, body {
   font-size: 0.95rem;
   font-weight: 600;
   margin: 0;
+  color: black;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -803,14 +826,14 @@ html, body {
 
 .appbar-sub {
   font-size: 0.7rem;
-  color: #94a3b8;
+  color: #0a0a0a;
 }
 
       .spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid rgba(255,255,255,0.3);
-  border-top-color: #fff;
+  border: 2px solid rgba(20, 57, 223, 0.3);
+  border-top-color: #0af641;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -822,6 +845,7 @@ html, body {
   background: none;
   border: none;
   padding: 0;
+  color: black;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -833,6 +857,7 @@ html, body {
 }
   .header-info {
   display: flex;
+  color: black;
   flex-direction: column;
 }
   .header-group-avatar, .header-group-avatar-fallback {
@@ -848,15 +873,11 @@ html, body {
   margin-left: 20px;
   border-radius: 50%;
   object-fit: cover;
-  border: 2px solid #334155;
+  border: 2px solid #066cfc;
 }
 
 
-.nav-current {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-}
+
 
 .status-sub {
   margin: 0;
@@ -869,7 +890,7 @@ html, body {
   height: 40px;
   border-radius: 50%;
   background: #3b82f6;
-  color: white;
+  color: black;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -904,9 +925,9 @@ html, body {
 }
 
 .action-icon {
-  background: #1e293b;
-  border: 1px solid #334155;
-  color: #94a3b8;
+  background: #f5f6f8;
+  border: 1px solid #0a0a0a;
+  color: #0a0a0a;
   width: 24px;
   height: 24px;
   border-radius: 6px;
@@ -922,8 +943,8 @@ html, body {
 
 .edit-textarea {
   width: 100%;
-  background: #0f172a;
-  color: white;
+  background: #fdfdfe;
+  color: black;
   border: 1px solid #3b82f6;
   border-radius: 4px;
   padding: 5px;
@@ -948,8 +969,8 @@ html, body {
     position: absolute;
     bottom: 10px;
     right: 10px;
-    background: rgba(0, 0, 0, 0.6);
-    color: white;
+    background: white;
+    color: black;
     border: none;
     width: 32px;
     height: 32px;
@@ -987,8 +1008,8 @@ html, body {
 .chat-container { 
     display: flex; 
     height: 100dvh; 
-    background: #0e1d20ff; 
-    color: white; 
+    background: rgb(241, 246, 247); 
+    color: black; 
     position: relative; 
     overflow: hidden; 
   }
@@ -997,10 +1018,11 @@ html, body {
   .sidebar { 
     width: 280px; 
     height: 100%;
-    background: #1e293b; 
+    background: #fafcff; 
     display: flex; 
+    color: black;
     flex-direction: column; 
-    border-right: 1px solid #334155; 
+    border-right: 1px solid #0c0c0c; 
     transition: transform 0.3s ease, width 0.3s ease;
     z-index: 1000;
   }
@@ -1029,14 +1051,14 @@ html, body {
       display: block;
       background: none;
       border: none;
-      color: #d2d8e1ff;
+      color: rgb(10, 10, 10);
       cursor: pointer;
     }
 
     .sidebar-overlay {
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.6);
+      background: white;
       backdrop-filter: blur(2px);
       z-index: 999;
     }
@@ -1065,24 +1087,27 @@ html, body {
       
         /* Sidebar Styles */
        
-        .sidebar-header { padding: 24px 20px; border-bottom: 1px solid #334155; }
-        .sidebar-header h3 { margin: 0; font-size: 1.1rem; color: #f8fafc; }
+        .sidebar-header { padding: 24px 20px; border-bottom: 1px solid #0a0a0a; }
+        .sidebar-header h3 { margin: 0; font-size: 1.1rem; color: #0b0b0b; }
         .member-list { flex: 1; overflow-y: auto; padding: 15px; }
-        .member-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-radius: 8px; margin-bottom: 8px; background: #33415544; transition: background 0.2s; }
-        .user-name { font-size: 0.9rem; color: #e2e8f0; }
-        .admin-badge { color: #f59e0b; font-size: 0.7rem; font-weight: bold; border: 1px solid #f59e0b44; padding: 2px 6px; border-radius: 4px; }
-        .kick-btn { color: #f87171; background: none; border: none; cursor: pointer; font-size: 0.75rem; transition: opacity 0.2s; }
+        .member-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-radius: 8px; margin-bottom: 8px; background: white; transition: background 0.2s; border: 1px solid black; }
+        .user-name { font-size: 0.9rem; color: #080808; }
+        .admin-badge { color: #131313; font-size: 0.7rem; font-weight: bold; border: 1px solid #07070744; padding: 2px 6px; border-radius: 4px; }
+        .kick-btn { color: #fd0707; background: none; border: 1px solid red; cursor: pointer; font-size: 0.75rem; transition: opacity 0.2s; border-radius: 12px }
         .kick-btn:hover { opacity: 0.7; }
 
         /* Main Chat Area */
-        .chat-area { flex: 1; display: flex; flex-direction: column; position: relative; background: #0f172a; }
+        .chat-area { flex: 1; display: flex; flex-direction: column; position: relative;  background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); background-opacity: 0.05;}
         .chat-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 20px;
-  background: #1e293b;
-  border-bottom: 1px solid #334155;
+  color: black;
+  margin-top: 0px;
+  padding: 0;
+  background: white; 
+  border: 1px solid black;
+  border-bottom: 1px solid #060606;
   height: 70px;
   flex-shrink: 0; /* Important: prevents header from collapsing */
 }
@@ -1092,7 +1117,7 @@ html, body {
   gap: 12px;
 }
         .back-btn { background: none; border: none; color: #94a3b8; font-size: 1.6rem; cursor: pointer; padding: 4px; }
-        .header-text h2 { margin: 0; font-size: 1.2rem; }
+        .header-text h2 { margin: 0; font-size: 1.2rem; color: black; }
         .status-sub { margin: 0; font-size: 0.75rem; color: #10b981; }
         .exit-btn { background: #334155; border: 1px solid #475569; color: #f1f5f9; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
 
@@ -1152,7 +1177,7 @@ html, body {
 .nav-link {
   background: none;
   border: none;
-  color: #94a3b8;
+  color: #0c0c0c;
   cursor: pointer;
   padding: 0;
   transition: color 0.2s;
@@ -1164,21 +1189,25 @@ html, body {
 }
 
 .nav-separator {
-  color: #475569;
+  color: #070707;
 }
 
 .nav-current {
-  color: #f1f5f9;
-  font-weight: 600;
+  color: #0c0c0c;
   max-width: 150px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-top: 0px;
+  font-size: 1rem;
+  font-weight: 600;
+
 }
 
 .header-right {
   display: flex;
   align-items: center;
+  margin-top: 0px;
 }
 
 .exit-btn {
@@ -1209,9 +1238,9 @@ html, body {
 }
 
 .call-btn {
-  background: #334155;
-  border: 1px solid #475569;
-  color: #94a3b8;
+  background: #fcfcfd;
+  border: 1px solid #0c0c0c;
+  color: #020202;
   width: 40px;
   height: 40px;
   border-radius: 10px;
@@ -1311,17 +1340,17 @@ html, body {
 }
 
         /* Footer Input */
-        .input-footer { padding: 20px 24px; background: #0f172a; border-top: 1px solid #334155; }
-        .input-wrapper { background: #1e293b; border: 1px solid #334155; border-radius: 24px; display: flex; align-items: flex-end; padding: 6px 12px; transition: border-color 0.2s; }
+        
+        .input-wrapper { background: #faf9f9; border: 1px solid #0a0909; border-radius: 24px; display: flex; align-items: flex-end; padding: 6px 12px; transition: border-color 0.2s; }
         .input-wrapper:focus-within { border-color: #3b82f6; }
-        .input-wrapper textarea { flex: 1; background: none; border: none; color: white; padding: 10px; font-size: 0.95rem; line-height: 1.4; outline: none; resize: none; max-height: 180px; }
-        .send-btn { background: #3b82f6; color: white; border: none; width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; margin-bottom: 2px; }
-        .send-btn:disabled { background: #334155; color: #64748b; cursor: default; }
+        .input-wrapper textarea { flex: 1; background: none; border: none; color: black; padding: 10px; font-size: 0.95rem; line-height: 1.4; outline: none; resize: none; max-height: 180px; }
+        .send-btn { background: #f6f7f8; color: black; border: 1px solid black; width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; margin-bottom: 2px; }
+        .send-btn:disabled { background: #fdfeff; color: #0a0a0a; cursor: default; }
         .send-btn:hover:not(:disabled) { background: #2563eb; transform: scale(1.05); }
         .input-footer { 
   padding: 20px 24px; 
-  background: #0f172a; 
-  border-top: 1px solid #334155; 
+  background: #fcfdfe; 
+  border: 1px solid #030303; 
   position: relative; 
 }
 
@@ -1357,7 +1386,7 @@ html, body {
 .icon-btn {
   background: none;
   border: none;
-  color: #94a3b8;
+  color: black;
   padding: 8px;
   cursor: pointer;
   display: flex;
@@ -1367,14 +1396,15 @@ html, body {
 }
 
 .icon-btn:hover {
-  color: #3b82f6;
+  color: #060606;
 }
 
 .input-wrapper { 
-  background: #1e293b; 
-  border: 1px solid #334155; 
+  background: white; 
+  border: 1px solid #060606; 
   border-radius: 24px; 
   display: flex; 
+  color: black;
   align-items: flex-end; 
   padding: 4px 12px; 
   transition: border-color 0.2s; 
@@ -1478,7 +1508,7 @@ html, body {
   color: #94a3b8;
 }
 
-        .state-screen { height: 100vh; display: flex; align-items: center; justify-content: center; background: #0f172a; color: white; font-size: 1.1rem; }
+        .state-screen { height: 100vh; display: flex; align-items: center; justify-content: center; background: white; color: black; font-size: 1.1rem; }
       `}</style>
     </div>
   );
