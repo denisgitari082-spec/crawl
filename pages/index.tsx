@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import logo from '../assets/logo.png';
 import { supabase } from "../src/lib/supabaseClient";
 
 
@@ -452,7 +453,9 @@ return (
 
     {/* --- Header & Navigation --- */}
     <header className="nav-header">
-      <h1 className="logo">ProConnect</h1>
+      <h1 className="logo">
+        <img src={logo.src} alt="Crawl Logo" />
+      </h1>
       
       <div className="view-toggle">
        <button 
@@ -641,7 +644,10 @@ return (
           {/* ACTION BAR */}
           <div className="service-actions">
             <button className={`action-btn ${service.liked_by_me ? "liked" : ""}`} onClick={() => toggleLike(service.id, service.liked_by_me)}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill={service.liked_by_me ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2"><path d="M7 10v12" /><path d="M15 3l-4 7v12h5.5a2 2 0 0 0 2-1.5l1.5-7a2 2 0 0 0-2-2.5h-6" /></svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M7 10v12" />
+    <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+  </svg>
               <span className="like-count">{service.like_count}</span>
             </button>
 
@@ -743,6 +749,15 @@ return (
 
 
       <style jsx>{`
+
+      .logo img {
+  height: 30px;       /* Adjust height to fit your header */
+  width: auto; 
+  background: none;       /* Maintains aspect ratio */
+  display: block; 
+  border-radius: 2opx;    /* Removes extra whitespace below image */
+  object-fit: contain;
+}
       .media-display-grid {
   display: grid;
   gap: 8px;
@@ -1257,7 +1272,7 @@ padding-right: 5px;
   z-index: 1000;
 
   background: rgb(250, 249, 249);
-  padding: 12px 4px;
+  padding: 5px 5px;
   color: black;
 
   display: flex;
@@ -1265,16 +1280,18 @@ padding-right: 5px;
   align-items: center;
 
   gap: 10px;
-  flex-wrap: wrap;
+  border-radius: 20px;
+  flex-wrap: nowrap;
+  margin-bottom: 5px;
 
   border: 1px solid rgb(4, 5, 5);
 }
 
         .logo { font-size: 1.4rem; font-weight: 800; background: linear-gradient(90deg, #3b82f6, #6366f1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }
         
-        .view-toggle { background: #fafbfc; padding: 4px; border-radius: 12px; display: flex; color: black; border: 1px solid black; }
-        .view-toggle button { background: none; border: 1px solid black; color: #080808; padding: 8px 14px; cursor: pointer; border-radius: 8px; font-weight: 600; font-size: 0.9rem; }
-        .view-toggle button.active { background: rgb(250, 245, 245); color: black; border: 1px solid black; }
+        .view-toggle { background: #fafbfc; gap: 2px; padding: 0px; border-radius: 12px; display: flex; color: black; border: none; }
+        .view-toggle button { background: none; border: none; color: #4904f9; padding: 0px; cursor: pointer; border-radius: none; font-weight: 600; font-size: 0.9rem; }
+        .view-toggle button.active { background: rgb(250, 245, 245); color: #4904f9; border: none; }
         
         .header-actions { display: flex; gap: 10px; align-items: center; }
         .header-btn, .msg-icon-container { position: relative; color: #94a3b8; padding: 10px; background: #1e293b; border-radius: 12px; display: flex; transition: 0.2s; }
@@ -1377,12 +1394,7 @@ border: 1px solid rgb(9, 10, 10);
         .spinner { width: 30px; height: 30px; border: 3px solid #0c0c0c; border-top-color: #3b82f6; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 15px; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        @media (max-width: 600px) {
-          .nav-header { flex-direction: column; gap: 15px; }
-          .logo { align-self: flex-start; }
-          .header-actions { position: absolute; top: 20px; right: 20px; }
 
-        }
 
 
           /* Avatar Trigger */
